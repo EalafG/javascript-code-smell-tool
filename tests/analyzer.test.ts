@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { Parser } from "acorn";
 import jsx from "acorn-jsx";
 import {
+  analyzeProjectSources,
   analyzeSource,
   assignDeterministicIds,
   deduplicateMethodResults,
@@ -55,8 +56,8 @@ const top = (value) => value?.profile?.name;`);
   assert.equal(new Set(results.map((result) => `${result.startLine}:${result.endLine}:${result.functionName}`)).size, 3);
   assert.equal(results[0].atfd, 0, "nested member accesses must not contribute to the parent method");
   assert.equal(results[1].atfd, 4);
-  assert.equal(results[1].fdp, 1);
-  assert.deepEqual(results[1].foreignProviders, ["customer"]);
+  assert.equal(results[1].fdp, 2);
+  assert.deepEqual(results[1].foreignProviders, ["unknown:customer", "unresolved:unknown:customer.address"]);
   assert.equal(results[1].isFeatureEnvy, true);
   assert.equal(results[2].atfd, 2);
 });
@@ -143,18 +144,19 @@ test("counts destructured local bindings and catch bindings in NOLV", () => {
   assert.equal(result.nolv, 6);
 });
 
-test("does not count direct member calls as foreign data access", () => {
+test("includes member calls in distinct coupling tuples, as the paper does", () => {
   const [result] = analyze(`function process(service, customer) {
   service.save(customer);
   console.log(customer.name);
   return customer.profile.id;
 }`);
 
-  assert.equal(result.atfd, 3);
-  assert.equal(result.fdp, 1);
-  assert.deepEqual(result.foreignProviders, ["customer"]);
+  assert.equal(result.atfd, 5);
+  assert.equal(result.fdp, 4);
+  assert.ok(result.foreignProviders.includes("unknown:service"));
+  assert.ok(result.couplingTuples.includes("F:unknown:service#save"));
   assert.equal(result.foreignMemberCalls, 2);
-  assert.deepEqual(result.foreignCallProviders, ["console", "service"]);
+  assert.deepEqual(result.foreignCallProviders, ["unknown:console", "unknown:service"]);
   assert.equal(result.isFeatureEnvy, false);
 });
 
@@ -166,10 +168,165 @@ test("parses JSX and analyzes callbacks independently", () => {
   assert.equal(results.length, 2);
   assert.equal(results[0].functionName, "View");
   assert.match(results[1].functionName, /^anonymous@L1:C/);
-  assert.equal(results[0].atfd, 0, "the nested callback is excluded and items.map is a member call, not data access");
+  assert.equal(results[0].atfd, 1, "the nested callback is excluded while items.map remains a coupling tuple");
   assert.equal(results[0].foreignMemberCalls, 1);
-  assert.deepEqual(results[0].foreignCallProviders, ["items"]);
+  assert.deepEqual(results[0].foreignCallProviders, ["unknown:items"]);
   assert.equal(results[1].atfd, 1);
+});
+
+test("counts distinct inferred type/property tuples rather than repeated AST occurrences", () => {
+  const [result] = analyze(`function repeated(customer) {
+  return customer.name + customer.name + customer.name + customer.name;
+}`);
+
+  assert.equal(result.atd, 1);
+  assert.equal(result.atfd, 1);
+  assert.equal(result.fdp, 1);
+  assert.equal(result.isFeatureEnvy, false);
+  assert.deepEqual(result.couplingTuples, ["F:unknown:customer#name"]);
+});
+
+test("detects Feature Envy from many foreign properties on one inferred provider", () => {
+  const [result] = analyze(`function inspect(customer) {
+  return customer.name + customer.age + customer.email + customer.status;
+}`);
+
+  assert.equal(result.atfd, 4);
+  assert.equal(result.laa, 0);
+  assert.equal(result.fdp, 1);
+  assert.equal(result.isFeatureEnvy, true);
+});
+
+test("uses call-site parameter flow and this-type hierarchy for locality", () => {
+  const results = analyze(`class Point {
+  x = 0;
+  static MP = 2;
+  midpoint(other) {
+    return this.x + other.x + Point.MP;
+  }
+}
+const first = new Point();
+const second = new Point();
+first.midpoint(second);`);
+  const result = results.find((item) => item.functionName === "midpoint");
+  assert.ok(result);
+  assert.equal(result.atd, 2);
+  assert.equal(result.atfd, 1);
+  assert.equal(result.laa, 0.5);
+  assert.equal(result.fdp, 1);
+  assert.deepEqual(result.foreignProviders, ["constructor:Point"]);
+  assert.equal(result.typeInferenceCoverage, 1);
+});
+
+test("keeps syntactic this access local when its concrete type is unresolved", () => {
+  const [result] = analyze("function currentState() { return this.value; }");
+  assert.equal(result.atd, 1);
+  assert.equal(result.atfd, 0);
+  assert.equal(result.laa, 1);
+  assert.deepEqual(result.couplingTuples, ["L:unknown:this#value"]);
+});
+
+test("propagates constructor arguments into instance property types", () => {
+  const results = analyze(`class Customer {
+  constructor(profile) { this.profile = profile; }
+  displayName() { return this.profile.name; }
+}
+const profile = { name: "Ada" };
+const customer = new Customer(profile);
+customer.displayName();`);
+  const result = results.find((item) => item.functionName === "displayName");
+  assert.ok(result);
+  assert.equal(result.atfd, 1);
+  assert.equal(result.unknownAccessCount, 0);
+  assert.equal(result.typeInferenceCoverage, 1);
+  assert.match(result.foreignProviders[0], /^object:src\/example\.js@/);
+});
+
+test("propagates aliases without inventing an additional provider", () => {
+  const [result] = analyze(`function alias(customer) {
+  const sameCustomer = customer;
+  return sameCustomer.name + customer.age;
+}`);
+
+  assert.equal(result.atfd, 2);
+  assert.equal(result.fdp, 1);
+  assert.deepEqual(result.foreignProviders, ["unknown:customer"]);
+});
+
+test("normalizes all array index accesses to one IDX tuple", () => {
+  const results = analyze(`function firstThree(items, index) {
+  return items[0] + items[1] + items[index];
+}
+const values = [1, 2, 3];
+firstThree(values, 2);`);
+  const result = results.find((item) => item.functionName === "firstThree");
+  assert.ok(result);
+  assert.equal(result.atfd, 1);
+  assert.equal(result.fdp, 1);
+  assert.equal(result.couplingTuples.length, 1);
+  assert.match(result.couplingTuples[0], /^F:array:src\/example\.js@\d+#IDX$/);
+});
+
+test("excludes a newly added property but counts a later update/read coupling", () => {
+  const additionResults = analyze("const record = {}; function add(target) { target.created = 1; } add(record);");
+  const addition = additionResults.find((item) => item.functionName === "add");
+  assert.ok(addition);
+  assert.equal(addition.atfd, 0);
+
+  const results = analyze(`function update(target) {
+  target.created = 1;
+  target.created = 2;
+  return target.created;
+}
+const record = {};
+update(record);`);
+  const update = results.find((item) => item.functionName === "update");
+  assert.ok(update);
+  assert.equal(update.atfd, 1);
+});
+
+test("reports uncertainty separately from the smell metrics", () => {
+  const [unknown] = analyze("function read(customer) { return customer.name; }");
+  assert.equal(unknown.unknownAccessCount, 1);
+  assert.equal(unknown.typeInferenceCoverage, 0);
+  assert.equal(unknown.feInferenceMode, "batched-project-static-object-type-inference-v1");
+  assert.equal(unknown.feMaxIterations, 12);
+  assert.equal(unknown.feTypeSetLimit, 12);
+  assert.equal(unknown.feBatchId, "B-0001");
+  assert.equal(unknown.feBatchFileCount, 1);
+  assert.equal(unknown.feBatchSizeLimit, 200);
+
+  const projectResults = analyzeProjectSources(parser, [{
+    source: "const customer = { name: 'A' }; function read(value) { return value.name; } read(customer);",
+    descriptor: { project: "research-project", fileName: "resolved.js", relativePath: "src/resolved.js" },
+  }], thresholds);
+  const resolved = projectResults.find((item) => item.functionName === "read");
+  assert.ok(resolved);
+  assert.equal(resolved.unknownAccessCount, 0);
+  assert.equal(resolved.typeInferenceCoverage, 1);
+});
+
+test("sorts files into deterministic bounded inference batches", () => {
+  const entries = Array.from({ length: 201 }, (_, index) => {
+    const ordinal = String(index + 1).padStart(3, "0");
+    return {
+      source: `function method${ordinal}() { return this.value; }`,
+      descriptor: {
+        project: "batched-project",
+        fileName: `file-${ordinal}.js`,
+        relativePath: `src/file-${ordinal}.js`,
+      },
+    };
+  }).reverse();
+  const results = analyzeProjectSources(parser, entries, thresholds);
+  const first = results.find((result) => result.relativePath === "src/file-001.js");
+  const last = results.find((result) => result.relativePath === "src/file-201.js");
+  assert.ok(first);
+  assert.ok(last);
+  assert.equal(first.feBatchId, "B-0001");
+  assert.equal(first.feBatchFileCount, 200);
+  assert.equal(last.feBatchId, "B-0002");
+  assert.equal(last.feBatchFileCount, 1);
 });
 
 test("handles empty and anonymous functions safely", () => {
@@ -242,6 +399,16 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.equal(CSV_HEADERS[10], "BLANK_LINES");
   assert.ok(CSV_HEADERS.includes("FOREIGN_MEMBER_CALLS"));
   assert.ok(CSV_HEADERS.includes("FOREIGN_CALL_PROVIDERS"));
+  assert.ok(CSV_HEADERS.includes("ATD"));
+  assert.ok(CSV_HEADERS.includes("COUPLING_TUPLES"));
+  assert.ok(CSV_HEADERS.includes("TYPE_INFERENCE_COVERAGE"));
+  assert.ok(CSV_HEADERS.includes("UNKNOWN_ACCESS_COUNT"));
+  assert.ok(CSV_HEADERS.includes("FE_INFERENCE_MODE"));
+  assert.ok(CSV_HEADERS.includes("FE_MAX_ITERATIONS"));
+  assert.ok(CSV_HEADERS.includes("FE_TYPE_SET_LIMIT"));
+  assert.ok(CSV_HEADERS.includes("FE_BATCH_ID"));
+  assert.ok(CSV_HEADERS.includes("FE_BATCH_FILE_COUNT"));
+  assert.ok(CSV_HEADERS.includes("FE_BATCH_SIZE_LIMIT"));
   assert.ok(csv.endsWith("\r\n"));
 });
 

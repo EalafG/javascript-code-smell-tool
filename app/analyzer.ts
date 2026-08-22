@@ -1,3 +1,13 @@
+import {
+  FEATURE_ENVY_BATCH_SIZE_LIMIT,
+  calculateFeatureEnvyMetrics,
+  createFeatureEnvyModel,
+  finalizeFeatureEnvyModel,
+  indexFeatureEnvySource,
+} from "./feature-envy.ts";
+import type { FeatureEnvyModel } from "./feature-envy.ts";
+export { FEATURE_ENVY_BATCH_SIZE_LIMIT } from "./feature-envy.ts";
+
 export type Thresholds = {
   longLoc: number;
   longCompound: boolean;
@@ -36,10 +46,20 @@ export type MethodResult = {
   condOpsMax: number;
   condNesting: number;
   numConditions: number;
+  atd: number;
   atfd: number;
   laa: number;
   fdp: number;
   foreignProviders: string[];
+  couplingTuples: string[];
+  typeInferenceCoverage: number;
+  unknownAccessCount: number;
+  feInferenceMode: string;
+  feMaxIterations: number;
+  feTypeSetLimit: number;
+  feBatchId: string;
+  feBatchFileCount: number;
+  feBatchSizeLimit: number;
   foreignMemberCalls: number;
   foreignCallProviders: string[];
   isLongMethod: boolean;
@@ -52,7 +72,7 @@ export type MethodResult = {
   source: string;
 };
 
-type AstNode = {
+export type AstNode = {
   type: string;
   start: number;
   end: number;
@@ -73,6 +93,15 @@ type AstComment = {
 };
 
 type SourceLineKind = "code" | "comment" | "blank";
+
+export type ParsedSource = {
+  ast: AstNode;
+  comments: AstComment[];
+  source: string;
+  descriptor: SourceDescriptor;
+};
+
+export type ProjectAnalysisModel = FeatureEnvyModel;
 
 const FUNCTION_TYPES = new Set([
   "FunctionDeclaration",
@@ -245,42 +274,6 @@ function countPatternBindings(node: unknown): number {
   return 0;
 }
 
-function unwrapChain(node: AstNode): AstNode {
-  let current = node;
-  while (current.type === "ChainExpression" && isNode(current.expression)) current = current.expression;
-  return current;
-}
-
-function memberRoot(node: AstNode): { local: boolean; provider: string } {
-  let current = unwrapChain(node);
-  while (current.type === "MemberExpression" && isNode(current.object)) {
-    current = unwrapChain(current.object);
-  }
-  if (current.type === "ThisExpression" || current.type === "Super") {
-    return { local: true, provider: "this" };
-  }
-  if (current.type === "Identifier") {
-    return { local: false, provider: String(current.name) };
-  }
-  if (current.type === "CallExpression" && isNode(current.callee)) {
-    const callee = memberRoot({
-      ...current.callee,
-      type: current.callee.type === "MemberExpression" ? "MemberExpression" : current.callee.type,
-    });
-    if (callee.local) return callee;
-    return { local: false, provider: callee.provider === "<expression>" ? "<call>" : callee.provider };
-  }
-  return { local: false, provider: "<expression>" };
-}
-
-function isDirectMemberInvocation(node: AstNode, parent: AstNode | null): boolean {
-  if (!parent) return false;
-  if ((parent.type === "CallExpression" || parent.type === "NewExpression") && parent.callee === node) {
-    return true;
-  }
-  return parent.type === "TaggedTemplateExpression" && parent.tag === node;
-}
-
 function classifySourceLines(source: string, comments: AstComment[]): SourceLineKind[] {
   const sortedComments = [...comments].sort((a, b) => a.start - b.start || a.end - b.end);
   const strippedParts: string[] = [];
@@ -335,6 +328,8 @@ function calculateMetrics(
   segmentNode: AstNode,
   source: string,
   sourceLineKinds: SourceLineKind[],
+  relativePath: string,
+  featureEnvyModel: FeatureEnvyModel,
 ) {
   let cyclo = 1;
   let maxNesting = 0;
@@ -342,17 +337,11 @@ function calculateMetrics(
   let condOpsMax = 0;
   let condNesting = 0;
   let numConditions = 0;
-  let localAccesses = 0;
-  let foreignAccesses = 0;
-  const foreignProviders = new Set<string>();
-  let foreignMemberCalls = 0;
-  const foreignCallProviders = new Set<string>();
 
   function visit(
     node: AstNode,
     nesting: number,
     conditionalDepth: number,
-    parent: AstNode | null,
   ) {
     if (node !== functionNode && isFunctionNode(node)) return;
 
@@ -363,20 +352,6 @@ function calculateMetrics(
     }
     if (node.type === "VariableDeclarator") nolv += countPatternBindings(node.id);
     if (node.type === "CatchClause") nolv += countPatternBindings(node.param);
-
-    if (node.type === "MemberExpression") {
-      const root = memberRoot(node);
-      if (isDirectMemberInvocation(node, parent)) {
-        if (!root.local) {
-          foreignMemberCalls += 1;
-          foreignCallProviders.add(root.provider);
-        }
-      } else if (root.local) localAccesses += 1;
-      else {
-        foreignAccesses += 1;
-        foreignProviders.add(root.provider);
-      }
-    }
 
     const expression = conditionExpression(node);
     const hasCondition = Boolean(expression);
@@ -398,14 +373,18 @@ function calculateMetrics(
         child,
         isElseIf ? nesting : nextNesting,
         isElseIf ? conditionalDepth : nextConditionalDepth,
-        node,
       );
     }
   }
 
-  visit(functionNode, 0, 0, null);
+  visit(functionNode, 0, 0);
   const params = Array.isArray(functionNode.params) ? functionNode.params.length : 0;
-  const totalAccesses = localAccesses + foreignAccesses;
+  const featureEnvy = calculateFeatureEnvyMetrics(
+    featureEnvyModel,
+    functionNode,
+    source,
+    relativePath,
+  );
   return {
     ...measureSegmentLines(segmentNode, sourceLineKinds),
     cyclo,
@@ -415,12 +394,7 @@ function calculateMetrics(
     condOpsMax,
     condNesting,
     numConditions,
-    atfd: foreignAccesses,
-    laa: totalAccesses === 0 ? 1 : localAccesses / totalAccesses,
-    fdp: foreignProviders.size,
-    foreignProviders: [...foreignProviders].sort((a, b) => a.localeCompare(b)),
-    foreignMemberCalls,
-    foreignCallProviders: [...foreignCallProviders].sort((a, b) => a.localeCompare(b)),
+    ...featureEnvy,
     source: source.slice(segmentNode.start, segmentNode.end),
   };
 }
@@ -454,12 +428,11 @@ export function classifyResult(result: MethodResult, thresholds: Thresholds): Me
   };
 }
 
-export function analyzeSource(
+export function parseJavaScriptSource(
   parser: { parse: (source: string, options: Record<string, unknown>) => AstNode },
   source: string,
   descriptor: SourceDescriptor,
-  thresholds: Thresholds,
-): MethodResult[] {
+): ParsedSource {
   let ast: AstNode;
   let comments: AstComment[];
   const baseOptions = {
@@ -485,6 +458,27 @@ export function analyzeSource(
     }
   }
 
+  return { ast, comments, source, descriptor };
+}
+
+export function createProjectAnalysisModel(batchId = "B-0001"): ProjectAnalysisModel {
+  return createFeatureEnvyModel(batchId);
+}
+
+export function indexParsedSource(model: ProjectAnalysisModel, parsed: ParsedSource) {
+  indexFeatureEnvySource(model, parsed.ast, parsed.source, parsed.descriptor.relativePath);
+}
+
+export function finalizeProjectAnalysisModel(model: ProjectAnalysisModel) {
+  finalizeFeatureEnvyModel(model);
+}
+
+export function analyzeParsedSource(
+  parsed: ParsedSource,
+  thresholds: Thresholds,
+  featureEnvyModel: ProjectAnalysisModel,
+): MethodResult[] {
+  const { ast, comments, source, descriptor } = parsed;
   const sourceLineKinds = classifySourceLines(source, comments);
   return collectFunctions(ast, source).map((candidate) => {
     const metrics = calculateMetrics(
@@ -492,6 +486,8 @@ export function analyzeSource(
       candidate.segmentNode,
       source,
       sourceLineKinds,
+      descriptor.relativePath,
+      featureEnvyModel,
     );
     const unclassified: MethodResult = {
       id: "",
@@ -511,6 +507,38 @@ export function analyzeSource(
     };
     return classifyResult(unclassified, thresholds);
   });
+}
+
+export function analyzeSource(
+  parser: { parse: (source: string, options: Record<string, unknown>) => AstNode },
+  source: string,
+  descriptor: SourceDescriptor,
+  thresholds: Thresholds,
+): MethodResult[] {
+  const parsed = parseJavaScriptSource(parser, source, descriptor);
+  const model = createProjectAnalysisModel();
+  indexParsedSource(model, parsed);
+  finalizeProjectAnalysisModel(model);
+  return analyzeParsedSource(parsed, thresholds, model);
+}
+
+export function analyzeProjectSources(
+  parser: { parse: (source: string, options: Record<string, unknown>) => AstNode },
+  entries: Array<{ source: string; descriptor: SourceDescriptor }>,
+  thresholds: Thresholds,
+): MethodResult[] {
+  const sortedEntries = [...entries].sort((a, b) => a.descriptor.relativePath.localeCompare(b.descriptor.relativePath));
+  const results: MethodResult[] = [];
+  for (let offset = 0; offset < sortedEntries.length; offset += FEATURE_ENVY_BATCH_SIZE_LIMIT) {
+    const batchNumber = Math.floor(offset / FEATURE_ENVY_BATCH_SIZE_LIMIT) + 1;
+    const batch = sortedEntries.slice(offset, offset + FEATURE_ENVY_BATCH_SIZE_LIMIT);
+    const parsedSources = batch.map((entry) => parseJavaScriptSource(parser, entry.source, entry.descriptor));
+    const model = createProjectAnalysisModel(`B-${String(batchNumber).padStart(4, "0")}`);
+    for (const parsed of parsedSources) indexParsedSource(model, parsed);
+    finalizeProjectAnalysisModel(model);
+    results.push(...parsedSources.flatMap((parsed) => analyzeParsedSource(parsed, thresholds, model)));
+  }
+  return results;
 }
 
 export function assignDeterministicIds(results: MethodResult[]): MethodResult[] {

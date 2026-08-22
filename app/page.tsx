@@ -2,12 +2,17 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  FEATURE_ENVY_BATCH_SIZE_LIMIT,
   MethodResult,
   Thresholds,
-  analyzeSource,
+  analyzeParsedSource,
   assignDeterministicIds,
   classifyResult,
+  createProjectAnalysisModel,
   deduplicateMethodResults,
+  finalizeProjectAnalysisModel,
+  indexParsedSource,
+  parseJavaScriptSource,
 } from "./analyzer";
 import { downloadCsv } from "./csv";
 
@@ -272,30 +277,63 @@ export default function Home() {
     setInputMessage("");
     setParseFailures([]);
     setParserStatus("ready");
-    setProgress({ current: 0, total: sourceEntries.length });
+    setProgress({ current: 0, total: sourceEntries.length * 2 });
 
-    const collected: MethodResult[] = [];
     const failures: ParseFailure[] = [];
+    const collected: MethodResult[] = [];
     let successfulFiles = 0;
-    for (let index = 0; index < sourceEntries.length; index += 1) {
-      const entry = sourceEntries[index];
-      try {
-        const source = await entry.read();
-        const fileResults = analyzeSource(window.acorn, source, {
-          project: projectName.trim() || "javascript-project",
-          fileName: entry.fileName,
-          relativePath: entry.relativePath,
-        }, thresholds);
-        collected.push(...fileResults);
-        successfulFiles += 1;
-      } catch (error) {
-        failures.push({
-          file: entry.relativePath,
-          message: error instanceof Error ? error.message : String(error),
-        });
+    let completedWork = 0;
+    const totalWork = sourceEntries.length * 2;
+    for (let batchOffset = 0; batchOffset < sourceEntries.length; batchOffset += FEATURE_ENVY_BATCH_SIZE_LIMIT) {
+      const batchNumber = Math.floor(batchOffset / FEATURE_ENVY_BATCH_SIZE_LIMIT) + 1;
+      const batchEntries = sourceEntries.slice(batchOffset, batchOffset + FEATURE_ENVY_BATCH_SIZE_LIMIT);
+      const indexedSources: Array<{
+        source: string;
+        descriptor: { project: string; fileName: string; relativePath: string };
+      }> = [];
+      const inferenceModel = createProjectAnalysisModel(`B-${String(batchNumber).padStart(4, "0")}`);
+
+      for (const entry of batchEntries) {
+        try {
+          const source = await entry.read();
+          const descriptor = {
+            project: projectName.trim() || "javascript-project",
+            fileName: entry.fileName,
+            relativePath: entry.relativePath,
+          };
+          const parsed = parseJavaScriptSource(window.acorn, source, descriptor);
+          indexParsedSource(inferenceModel, parsed);
+          indexedSources.push({ source, descriptor });
+          completedWork += 1;
+        } catch (error) {
+          failures.push({
+            file: entry.relativePath,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          completedWork += 2;
+        }
+        setProgress({ current: completedWork, total: totalWork });
+        if (completedWork % 12 === 0) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       }
-      setProgress({ current: index + 1, total: sourceEntries.length });
-      if ((index + 1) % 12 === 0) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      finalizeProjectAnalysisModel(inferenceModel);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      for (const entry of indexedSources) {
+        try {
+          const parsed = parseJavaScriptSource(window.acorn, entry.source, entry.descriptor);
+          collected.push(...analyzeParsedSource(parsed, thresholds, inferenceModel));
+          successfulFiles += 1;
+        } catch (error) {
+          failures.push({
+            file: entry.descriptor.relativePath,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+        completedWork += 1;
+        setProgress({ current: completedWork, total: totalWork });
+        if (completedWork % 12 === 0) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
     }
 
     setRawResults(assignDeterministicIds(deduplicateMethodResults(collected)));
@@ -511,7 +549,7 @@ export default function Home() {
               <h3>Feature Envy</h3>
               <p className="formula">ATFD &gt; FEW ∧ LAA &lt; ⅓ ∧ FDP ≤ FEW</p>
               <ThresholdInput label="FEW" value={thresholds.few} onChange={(few) => setThresholds((value) => ({ ...value, few }))} />
-              <p className="rule-note">Non-<code>this</code> data-member accesses are foreign. Direct member calls are reported separately; nested functions are excluded from the parent.</p>
+              <p className="rule-note">Paper-inspired static object-type inference in deterministic batches of up to 200 sorted files. ATD/ATFD use distinct type-property tuples; member calls are included, array indices become <code>IDX</code>, and nested functions remain independent. Coverage, batch provenance, and unresolved accesses are exported. Each batch uses 12 solve iterations and a 12-type widening limit. This is not the paper&apos;s full JIPDA abstract interpreter.</p>
             </article>
           </div>
         </section>
@@ -608,7 +646,7 @@ export default function Home() {
               <table>
                 <thead>
                   <tr>
-                    <th>ID / Method</th><th>File</th><th>Type</th><th>Lines</th><th title="Nonblank, non-comment lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>COND_NESTING</th><th>ATFD</th><th>LAA</th><th>FDP</th><th>FOREIGN_MEMBER_CALLS</th><th>Status</th>
+                    <th>ID / Method</th><th>File</th><th>Type</th><th>Lines</th><th title="Nonblank, non-comment lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>COND_NESTING</th><th title="Access to data: distinct local and foreign type-property tuples">ATD</th><th>ATFD</th><th>LAA</th><th>FDP</th><th title="Resolved coupling tuples / all coupling tuples">TYPE_COVERAGE</th><th>UNKNOWN_ACCESSES</th><th>FOREIGN_MEMBER_CALLS</th><th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -628,9 +666,12 @@ export default function Home() {
                       <td>{result.nolv}</td>
                       <td>{result.condOpsMax}</td>
                       <td>{result.condNesting}</td>
+                      <td>{result.atd}</td>
                       <td>{result.atfd}</td>
                       <td>{result.laa.toFixed(3)}</td>
                       <td title={result.foreignProviders.join(" | ")}>{result.fdp}</td>
+                      <td>{result.typeInferenceCoverage.toFixed(3)}</td>
+                      <td>{result.unknownAccessCount}</td>
                       <td title={result.foreignCallProviders.join(" | ")}>{result.foreignMemberCalls}</td>
                       <td><SmellBadges result={result} /></td>
                     </tr>
@@ -659,13 +700,17 @@ export default function Home() {
                     <MetricPill label="CYCLO" value={result.cyclo} />
                     <MetricPill label="MAXNESTING" value={result.maxNesting} />
                     <MetricPill label="CONDOPS_MAX" value={result.condOpsMax} />
+                    <MetricPill label="ATD" value={result.atd} />
                     <MetricPill label="ATFD" value={result.atfd} />
                     <MetricPill label="LAA" value={result.laa.toFixed(3)} />
                     <MetricPill label="FDP" value={result.fdp} />
+                    <MetricPill label="TYPE_COVERAGE" value={result.typeInferenceCoverage.toFixed(3)} />
+                    <MetricPill label="UNKNOWN_ACCESSES" value={result.unknownAccessCount} />
                     <MetricPill label="FOREIGN_MEMBER_CALLS" value={result.foreignMemberCalls} />
                   </div>
                   {result.foreignProviders.length > 0 && <p className="provider-line"><strong>Foreign providers:</strong> {result.foreignProviders.join(" · ")}</p>}
                   {result.foreignCallProviders.length > 0 && <p className="provider-line"><strong>Foreign call providers:</strong> {result.foreignCallProviders.join(" · ")}</p>}
+                  {result.couplingTuples.length > 0 && <p className="provider-line"><strong>Distinct coupling tuples:</strong> {result.couplingTuples.join(" · ")}</p>}
                   <pre><code>{result.source}</code></pre>
                 </article>
               ))}
