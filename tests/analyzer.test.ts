@@ -94,9 +94,32 @@ test("handles empty and anonymous functions safely", () => {
   assert.equal(results.length, 2);
   assert.equal(results[0].functionName, "empty");
   assert.equal(results[0].loc, 1);
+  assert.equal(results[0].spanLoc, 1);
+  assert.equal(results[0].commentLines, 0);
+  assert.equal(results[0].blankLines, 0);
   assert.equal(results[0].cyclo, 1);
   assert.equal(results[0].laa, 1);
   assert.match(results[1].functionName, /^anonymous@L1:C/);
+});
+
+test("separates code LOC from physical span, comment-only lines, and blank lines", () => {
+  const [result] = analyze(`function documented(value) {
+  // This comment should not count as code.
+
+  const url = "https://example.test"; // A trailing comment remains a code line.
+  /*
+   * This block is documentation.
+   */
+  return value + url.length;
+}`);
+
+  assert.equal(result.startLine, 1);
+  assert.equal(result.endLine, 9);
+  assert.equal(result.spanLoc, 9);
+  assert.equal(result.loc, 4);
+  assert.equal(result.commentLines, 4);
+  assert.equal(result.blankLines, 1);
+  assert.equal(result.isLongMethod, false);
 });
 
 test("assigns deterministic IDs after sorting by relative path and location", () => {
@@ -122,6 +145,9 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.match(lines[1], /"Research, ""A"""/);
   assert.match(lines[1], /"src\/a,b\.js"/);
   assert.match(lines[1], /"clean ""method"""/);
+  assert.equal(CSV_HEADERS[8], "SPAN_LOC");
+  assert.equal(CSV_HEADERS[9], "COMMENT_LINES");
+  assert.equal(CSV_HEADERS[10], "BLANK_LINES");
   assert.ok(csv.endsWith("\r\n"));
 });
 
@@ -138,4 +164,10 @@ test("ships a browser-local Acorn 8 parser with JSX support", async () => {
     "const View = () => <main>{items.map(item => item.name)}</main>",
     { ecmaVersion: "latest", sourceType: "module", locations: true },
   ));
+  const comments: unknown[] = [];
+  localAcorn.parse(
+    "function documented() {\n  // documentation\n  return true;\n}",
+    { ecmaVersion: "latest", sourceType: "module", locations: true, onComment: comments },
+  );
+  assert.equal(comments.length, 1, "the shipped browser parser must expose comments for LOC classification");
 });

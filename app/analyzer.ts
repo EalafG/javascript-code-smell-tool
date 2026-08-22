@@ -24,6 +24,9 @@ export type MethodResult = {
   startLine: number;
   endLine: number;
   loc: number;
+  spanLoc: number;
+  commentLines: number;
+  blankLines: number;
   cyclo: number;
   maxNesting: number;
   nop: number;
@@ -59,6 +62,13 @@ type FunctionCandidate = {
   functionType: string;
   functionName: string;
 };
+
+type AstComment = {
+  start: number;
+  end: number;
+};
+
+type SourceLineKind = "code" | "comment" | "blank";
 
 const FUNCTION_TYPES = new Set([
   "FunctionDeclaration",
@@ -238,7 +248,59 @@ function memberRoot(node: AstNode): { local: boolean; provider: string } {
   return { local: false, provider: "<expression>" };
 }
 
-function calculateMetrics(functionNode: AstNode, segmentNode: AstNode, source: string) {
+function classifySourceLines(source: string, comments: AstComment[]): SourceLineKind[] {
+  const sortedComments = [...comments].sort((a, b) => a.start - b.start || a.end - b.end);
+  const strippedParts: string[] = [];
+  let cursor = 0;
+
+  for (const comment of sortedComments) {
+    const start = Math.max(cursor, comment.start);
+    const end = Math.max(start, comment.end);
+    strippedParts.push(source.slice(cursor, start));
+    strippedParts.push(source.slice(start, end).replace(/[^\r\n]/g, " "));
+    cursor = end;
+  }
+  strippedParts.push(source.slice(cursor));
+
+  const originalLines = source.split(/\r\n|\r|\n/);
+  const commentStrippedLines = strippedParts.join("").split(/\r\n|\r|\n/);
+  return originalLines.map((line, index) => {
+    if (!line.trim()) return "blank";
+    if (!(commentStrippedLines[index] ?? "").trim()) return "comment";
+    return "code";
+  });
+}
+
+function measureSegmentLines(segmentNode: AstNode, sourceLineKinds: SourceLineKind[]) {
+  const startLine = segmentNode.loc?.start.line ?? 1;
+  const endLine = segmentNode.loc?.end.line ?? startLine;
+  let loc = 0;
+  let commentLines = 0;
+  let blankLines = 0;
+
+  for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+    const kind = sourceLineKinds[lineNumber - 1] ?? "code";
+    if (kind === "blank") blankLines += 1;
+    else if (kind === "comment") commentLines += 1;
+    else loc += 1;
+  }
+
+  return {
+    startLine,
+    endLine,
+    loc: Math.max(1, loc),
+    spanLoc: Math.max(1, endLine - startLine + 1),
+    commentLines,
+    blankLines,
+  };
+}
+
+function calculateMetrics(
+  functionNode: AstNode,
+  segmentNode: AstNode,
+  source: string,
+  sourceLineKinds: SourceLineKind[],
+) {
   let cyclo = 1;
   let maxNesting = 0;
   let nolv = 0;
@@ -284,13 +346,9 @@ function calculateMetrics(functionNode: AstNode, segmentNode: AstNode, source: s
 
   visit(functionNode, 0, 0);
   const params = Array.isArray(functionNode.params) ? functionNode.params.length : 0;
-  const startLine = segmentNode.loc?.start.line ?? 1;
-  const endLine = segmentNode.loc?.end.line ?? startLine;
   const totalAccesses = localAccesses + foreignAccesses;
   return {
-    startLine,
-    endLine,
-    loc: Math.max(1, endLine - startLine + 1),
+    ...measureSegmentLines(segmentNode, sourceLineKinds),
     cyclo,
     maxNesting,
     nop: params,
@@ -342,6 +400,7 @@ export function analyzeSource(
   thresholds: Thresholds,
 ): MethodResult[] {
   let ast: AstNode;
+  let comments: AstComment[];
   const baseOptions = {
     ecmaVersion: "latest",
     locations: true,
@@ -349,21 +408,30 @@ export function analyzeSource(
     allowAwaitOutsideFunction: true,
   };
   try {
-    ast = parser.parse(source, { ...baseOptions, sourceType: "module" });
+    comments = [];
+    ast = parser.parse(source, { ...baseOptions, sourceType: "module", onComment: comments });
   } catch (moduleError) {
     try {
+      comments = [];
       ast = parser.parse(source, {
         ...baseOptions,
         sourceType: "script",
         allowReturnOutsideFunction: true,
+        onComment: comments,
       });
     } catch {
       throw moduleError;
     }
   }
 
+  const sourceLineKinds = classifySourceLines(source, comments);
   return collectFunctions(ast, source).map((candidate) => {
-    const metrics = calculateMetrics(candidate.functionNode, candidate.segmentNode, source);
+    const metrics = calculateMetrics(
+      candidate.functionNode,
+      candidate.segmentNode,
+      source,
+      sourceLineKinds,
+    );
     const unclassified: MethodResult = {
       id: "",
       project: descriptor.project,

@@ -481,7 +481,8 @@ export default function Home() {
               <div className="rule-card__top"><span>LM</span><small>Method size</small></div>
               <h3>Long Method</h3>
               <p className="formula">LOC ≥ threshold</p>
-              <ThresholdInput label="LOC threshold" value={thresholds.longLoc} onChange={(longLoc) => setThresholds((value) => ({ ...value, longLoc }))} />
+              <ThresholdInput label="Code LOC threshold" value={thresholds.longLoc} onChange={(longLoc) => setThresholds((value) => ({ ...value, longLoc }))} />
+              <p className="rule-note">LOC counts nonblank, non-comment lines. Physical span, comment lines, and blank lines remain available as separate metrics.</p>
               <label className="switch-row">
                 <input type="checkbox" checked={thresholds.longCompound} onChange={(event) => setThresholds((value) => ({ ...value, longCompound: event.target.checked }))} />
                 <span>Use compound rule</span>
@@ -611,7 +612,7 @@ export default function Home() {
               <table>
                 <thead>
                   <tr>
-                    <th>ID / Method</th><th>File</th><th>Type</th><th>Lines</th><th>LOC</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>COND_NESTING</th><th>ATFD</th><th>LAA</th><th>FDP</th><th>Status</th>
+                    <th>ID / Method</th><th>File</th><th>Type</th><th>Lines</th><th title="Nonblank, non-comment lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>COND_NESTING</th><th>ATFD</th><th>LAA</th><th>FDP</th><th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -622,6 +623,9 @@ export default function Home() {
                       <td>{result.functionType}</td>
                       <td>{result.startLine}–{result.endLine}</td>
                       <td>{result.loc}</td>
+                      <td>{result.spanLoc}</td>
+                      <td>{result.commentLines}</td>
+                      <td>{result.blankLines}</td>
                       <td>{result.cyclo}</td>
                       <td>{result.maxNesting}</td>
                       <td>{result.nop}</td>
@@ -652,6 +656,9 @@ export default function Home() {
                   </div>
                   <div className="metrics-strip">
                     <MetricPill label="LOC" value={result.loc} />
+                    <MetricPill label="SPAN_LOC" value={result.spanLoc} />
+                    <MetricPill label="COMMENT_LINES" value={result.commentLines} />
+                    <MetricPill label="BLANK_LINES" value={result.blankLines} />
                     <MetricPill label="CYCLO" value={result.cyclo} />
                     <MetricPill label="MAXNESTING" value={result.maxNesting} />
                     <MetricPill label="CONDOPS_MAX" value={result.condOpsMax} />

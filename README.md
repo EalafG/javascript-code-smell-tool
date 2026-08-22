@@ -42,7 +42,10 @@ Every function declaration, function expression, arrow function, object method, 
 
 The exported metrics are:
 
-- `LOC`: inclusive physical source lines for the function or method segment
+- `LOC`: nonblank, non-comment source lines for the function or method segment; lines containing code plus a trailing comment count as code
+- `SPAN_LOC`: inclusive physical source lines from the segment start to end
+- `COMMENT_LINES`: nonblank lines containing only comment text
+- `BLANK_LINES`: blank or whitespace-only lines
 - `CYCLO`: McCabe-style cyclomatic complexity with a baseline of 1
 - `MAXNESTING`: maximum control-structure nesting depth
 - `NOP`: number of parameters
@@ -59,7 +62,7 @@ The exported metrics are:
 
 Defaults are visible and editable in the interface:
 
-- Long Method: `LOC >= 31`
+- Long Method: `LOC >= 31`, where `LOC` excludes blank and comment-only lines
 - Optional compound Long Method: `LOC >= 31 AND (CYCLO >= 10 OR MAXNESTING >= 5)`
 - Complex Method: `CYCLO >= 10`
 - Complex Conditional: `CONDOPS_MAX >= 5`
@@ -72,7 +75,7 @@ Feature Envy is a transparent JavaScript adaptation: every member access rooted 
 CSV exports use one row per method and a fixed column order:
 
 ```text
-ID,PROJECT,FILE,FUNCTION,FUNCTION_TYPE,START_LINE,END_LINE,LOC,CYCLO,MAXNESTING,NOP,NOLV,CONDOPS_MAX,COND_NESTING,NUM_CONDITIONS,ATFD,LAA,FDP,FOREIGN_PROVIDERS,is_long_method,is_complex_method,is_complex_conditional,is_feature_envy,is_smelly,SMELL_COUNT,SMELL_TYPES
+ID,PROJECT,FILE,FUNCTION,FUNCTION_TYPE,START_LINE,END_LINE,LOC,SPAN_LOC,COMMENT_LINES,BLANK_LINES,CYCLO,MAXNESTING,NOP,NOLV,CONDOPS_MAX,COND_NESTING,NUM_CONDITIONS,ATFD,LAA,FDP,FOREIGN_PROVIDERS,is_long_method,is_complex_method,is_complex_conditional,is_feature_envy,is_smelly,SMELL_COUNT,SMELL_TYPES
 ```
 
 Binary labels use `0` and `1`. Multi-valued providers and smell types use `|`. Values containing commas, quotes, or line breaks are escaped according to CSV conventions.
