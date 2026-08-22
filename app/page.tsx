@@ -7,6 +7,7 @@ import {
   analyzeSource,
   assignDeterministicIds,
   classifyResult,
+  deduplicateMethodResults,
 } from "./analyzer";
 import { downloadCsv } from "./csv";
 
@@ -297,12 +298,7 @@ export default function Home() {
       if ((index + 1) % 12 === 0) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     }
 
-    const deduplicated = new Map<string, MethodResult>();
-    for (const result of collected) {
-      const key = `${result.relativePath}\u0000${result.functionType}\u0000${result.startLine}\u0000${result.endLine}\u0000${result.functionName}`;
-      if (!deduplicated.has(key)) deduplicated.set(key, result);
-    }
-    setRawResults(assignDeterministicIds([...deduplicated.values()]));
+    setRawResults(assignDeterministicIds(deduplicateMethodResults(collected)));
     setFilesAnalyzed(successfulFiles);
     setParseFailures(failures);
     setParserStatus(failures.length ? "parse-error" : "ready");
@@ -507,7 +503,7 @@ export default function Home() {
               <h3>Complex Conditional</h3>
               <p className="formula">CONDOPS_MAX ≥ threshold</p>
               <ThresholdInput label="Condition operators" value={thresholds.conditionalOps} onChange={(conditionalOps) => setThresholds((value) => ({ ...value, conditionalOps }))} />
-              <p className="rule-note">Counts !, &&, ||, equality, inequality, and relational operators in each condition.</p>
+              <p className="rule-note">Counts !, &&, ||, equality, inequality, and relational operators in each Boolean condition. Switch cases affect CYCLO, not conditional-expression metrics.</p>
             </article>
 
             <article className="rule-card">
@@ -515,7 +511,7 @@ export default function Home() {
               <h3>Feature Envy</h3>
               <p className="formula">ATFD &gt; FEW ∧ LAA &lt; ⅓ ∧ FDP ≤ FEW</p>
               <ThresholdInput label="FEW" value={thresholds.few} onChange={(few) => setThresholds((value) => ({ ...value, few }))} />
-              <p className="rule-note">Non-<code>this</code> member accesses are foreign. Nested functions are excluded from the parent.</p>
+              <p className="rule-note">Non-<code>this</code> data-member accesses are foreign. Direct member calls are reported separately; nested functions are excluded from the parent.</p>
             </article>
           </div>
         </section>
@@ -612,7 +608,7 @@ export default function Home() {
               <table>
                 <thead>
                   <tr>
-                    <th>ID / Method</th><th>File</th><th>Type</th><th>Lines</th><th title="Nonblank, non-comment lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>COND_NESTING</th><th>ATFD</th><th>LAA</th><th>FDP</th><th>Status</th>
+                    <th>ID / Method</th><th>File</th><th>Type</th><th>Lines</th><th title="Nonblank, non-comment lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>COND_NESTING</th><th>ATFD</th><th>LAA</th><th>FDP</th><th>FOREIGN_MEMBER_CALLS</th><th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -635,6 +631,7 @@ export default function Home() {
                       <td>{result.atfd}</td>
                       <td>{result.laa.toFixed(3)}</td>
                       <td title={result.foreignProviders.join(" | ")}>{result.fdp}</td>
+                      <td title={result.foreignCallProviders.join(" | ")}>{result.foreignMemberCalls}</td>
                       <td><SmellBadges result={result} /></td>
                     </tr>
                   ))}
@@ -665,8 +662,10 @@ export default function Home() {
                     <MetricPill label="ATFD" value={result.atfd} />
                     <MetricPill label="LAA" value={result.laa.toFixed(3)} />
                     <MetricPill label="FDP" value={result.fdp} />
+                    <MetricPill label="FOREIGN_MEMBER_CALLS" value={result.foreignMemberCalls} />
                   </div>
                   {result.foreignProviders.length > 0 && <p className="provider-line"><strong>Foreign providers:</strong> {result.foreignProviders.join(" · ")}</p>}
+                  {result.foreignCallProviders.length > 0 && <p className="provider-line"><strong>Foreign call providers:</strong> {result.foreignCallProviders.join(" · ")}</p>}
                   <pre><code>{result.source}</code></pre>
                 </article>
               ))}

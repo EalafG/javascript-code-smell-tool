@@ -7,6 +7,7 @@ import jsx from "acorn-jsx";
 import {
   analyzeSource,
   assignDeterministicIds,
+  deduplicateMethodResults,
 } from "../app/analyzer.ts";
 import type { MethodResult, Thresholds } from "../app/analyzer.ts";
 import { CSV_HEADERS, toCsv } from "../app/csv.ts";
@@ -77,6 +78,86 @@ test("calculates cyclomatic and conditional metrics from explicit operators", ()
   assert.equal(result.isComplexConditional, true);
 });
 
+test("covers every documented cyclomatic decision construct", () => {
+  const [result] = analyze(`function decisions(a, b, c, d, object, values) {
+  if (a) {}
+  else if (b) {}
+  for (; c;) { break; }
+  for (const key in object) { void key; }
+  for (const value of values) { void value; }
+  while (c) { break; }
+  do { break; } while (d);
+  try {} catch (error) { void error; }
+  switch (a) { case 1: break; case 2: break; default: break; }
+  const selected = a ? b : c;
+  return selected && b || c;
+}`);
+
+  assert.equal(result.cyclo, 14);
+  assert.equal(result.maxNesting, 1);
+  assert.equal(result.numConditions, 6);
+  assert.equal(result.condNesting, 1);
+});
+
+test("does not treat switch case labels as conditional-expression sites", () => {
+  const [result] = analyze(`function route(value) {
+  switch (value) {
+    case 1: return "one";
+    case 2: return "two";
+    default: return "other";
+  }
+}`);
+
+  assert.equal(result.cyclo, 3, "non-default cases still contribute to cyclomatic complexity");
+  assert.equal(result.numConditions, 0);
+  assert.equal(result.condNesting, 0);
+  assert.equal(result.condOpsMax, 0);
+});
+
+test("treats an else-if chain as one nesting level", () => {
+  const [result] = analyze(`function category(value) {
+  if (value > 10) return "high";
+  else if (value > 5) return "medium";
+  else if (value > 0) return "low";
+  return "none";
+}`);
+
+  assert.equal(result.cyclo, 4);
+  assert.equal(result.numConditions, 3);
+  assert.equal(result.maxNesting, 1);
+  assert.equal(result.condNesting, 1);
+});
+
+test("counts destructured local bindings and catch bindings in NOLV", () => {
+  const [result] = analyze(`function collect(input) {
+  const { first, second: renamed } = input;
+  const [third, , fourth] = input.items;
+  try {
+    return first + renamed + third + fourth;
+  } catch ({ message }) {
+    let fallback;
+    return fallback || message;
+  }
+}`);
+
+  assert.equal(result.nolv, 6);
+});
+
+test("does not count direct member calls as foreign data access", () => {
+  const [result] = analyze(`function process(service, customer) {
+  service.save(customer);
+  console.log(customer.name);
+  return customer.profile.id;
+}`);
+
+  assert.equal(result.atfd, 3);
+  assert.equal(result.fdp, 1);
+  assert.deepEqual(result.foreignProviders, ["customer"]);
+  assert.equal(result.foreignMemberCalls, 2);
+  assert.deepEqual(result.foreignCallProviders, ["console", "service"]);
+  assert.equal(result.isFeatureEnvy, false);
+});
+
 test("parses JSX and analyzes callbacks independently", () => {
   const results = analyze(
     "const View = ({ items }) => <section>{items.map(item => <span>{item.name}</span>)}</section>;",
@@ -85,7 +166,9 @@ test("parses JSX and analyzes callbacks independently", () => {
   assert.equal(results.length, 2);
   assert.equal(results[0].functionName, "View");
   assert.match(results[1].functionName, /^anonymous@L1:C/);
-  assert.equal(results[0].atfd, 1, "the nested callback is excluded but items.map belongs to View");
+  assert.equal(results[0].atfd, 0, "the nested callback is excluded and items.map is a member call, not data access");
+  assert.equal(results[0].foreignMemberCalls, 1);
+  assert.deepEqual(results[0].foreignCallProviders, ["items"]);
   assert.equal(results[1].atfd, 1);
 });
 
@@ -132,6 +215,15 @@ test("assigns deterministic IDs after sorting by relative path and location", ()
   assert.equal(results[1].functionName, "second");
 });
 
+test("deduplicates exact rows without collapsing distinct same-line methods", () => {
+  const methods = analyze("const object = { same() {}, same() {} };");
+  assert.equal(methods.length, 2);
+
+  const results = deduplicateMethodResults([methods[0], methods[0], methods[1]]);
+  assert.equal(results.length, 2);
+  assert.notEqual(results[0].startOffset, results[1].startOffset);
+});
+
 test("exports the stable research schema and escapes CSV values", () => {
   const [base] = assignDeterministicIds(analyze("function clean() {}", "src/a,b.js"));
   const result: MethodResult = {
@@ -148,6 +240,8 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.equal(CSV_HEADERS[8], "SPAN_LOC");
   assert.equal(CSV_HEADERS[9], "COMMENT_LINES");
   assert.equal(CSV_HEADERS[10], "BLANK_LINES");
+  assert.ok(CSV_HEADERS.includes("FOREIGN_MEMBER_CALLS"));
+  assert.ok(CSV_HEADERS.includes("FOREIGN_CALL_PROVIDERS"));
   assert.ok(csv.endsWith("\r\n"));
 });
 

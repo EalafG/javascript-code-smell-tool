@@ -23,6 +23,8 @@ export type MethodResult = {
   functionType: string;
   startLine: number;
   endLine: number;
+  startOffset: number;
+  endOffset: number;
   loc: number;
   spanLoc: number;
   commentLines: number;
@@ -38,6 +40,8 @@ export type MethodResult = {
   laa: number;
   fdp: number;
   foreignProviders: string[];
+  foreignMemberCalls: number;
+  foreignCallProviders: string[];
   isLongMethod: boolean;
   isComplexMethod: boolean;
   isComplexConditional: boolean;
@@ -216,8 +220,29 @@ function conditionExpression(node: AstNode): AstNode | null {
     return isNode(node.test) ? node.test : null;
   }
   if (node.type === "ForStatement") return isNode(node.test) ? node.test : null;
-  if (node.type === "SwitchCase") return isNode(node.test) ? node.test : null;
   return null;
+}
+
+function countPatternBindings(node: unknown): number {
+  if (!isNode(node)) return 0;
+  if (node.type === "Identifier") return 1;
+  if (node.type === "RestElement") return countPatternBindings(node.argument);
+  if (node.type === "AssignmentPattern") return countPatternBindings(node.left);
+  if (node.type === "ArrayPattern") {
+    return Array.isArray(node.elements)
+      ? node.elements.reduce<number>((count, element) => count + countPatternBindings(element), 0)
+      : 0;
+  }
+  if (node.type === "ObjectPattern") {
+    if (!Array.isArray(node.properties)) return 0;
+    return node.properties.reduce<number>((count, property) => {
+      if (!isNode(property)) return count;
+      if (property.type === "RestElement") return count + countPatternBindings(property.argument);
+      if (property.type === "Property") return count + countPatternBindings(property.value);
+      return count;
+    }, 0);
+  }
+  return 0;
 }
 
 function unwrapChain(node: AstNode): AstNode {
@@ -246,6 +271,14 @@ function memberRoot(node: AstNode): { local: boolean; provider: string } {
     return { local: false, provider: callee.provider === "<expression>" ? "<call>" : callee.provider };
   }
   return { local: false, provider: "<expression>" };
+}
+
+function isDirectMemberInvocation(node: AstNode, parent: AstNode | null): boolean {
+  if (!parent) return false;
+  if ((parent.type === "CallExpression" || parent.type === "NewExpression") && parent.callee === node) {
+    return true;
+  }
+  return parent.type === "TaggedTemplateExpression" && parent.tag === node;
 }
 
 function classifySourceLines(source: string, comments: AstComment[]): SourceLineKind[] {
@@ -288,6 +321,8 @@ function measureSegmentLines(segmentNode: AstNode, sourceLineKinds: SourceLineKi
   return {
     startLine,
     endLine,
+    startOffset: segmentNode.start,
+    endOffset: segmentNode.end,
     loc: Math.max(1, loc),
     spanLoc: Math.max(1, endLine - startLine + 1),
     commentLines,
@@ -310,8 +345,15 @@ function calculateMetrics(
   let localAccesses = 0;
   let foreignAccesses = 0;
   const foreignProviders = new Set<string>();
+  let foreignMemberCalls = 0;
+  const foreignCallProviders = new Set<string>();
 
-  function visit(node: AstNode, nesting: number, conditionalDepth: number) {
+  function visit(
+    node: AstNode,
+    nesting: number,
+    conditionalDepth: number,
+    parent: AstNode | null,
+  ) {
     if (node !== functionNode && isFunctionNode(node)) return;
 
     if (CYCLO_TYPES.has(node.type)) cyclo += 1;
@@ -319,11 +361,17 @@ function calculateMetrics(
     if (node.type === "LogicalExpression" && (node.operator === "&&" || node.operator === "||")) {
       cyclo += 1;
     }
-    if (node.type === "VariableDeclarator") nolv += 1;
+    if (node.type === "VariableDeclarator") nolv += countPatternBindings(node.id);
+    if (node.type === "CatchClause") nolv += countPatternBindings(node.param);
 
     if (node.type === "MemberExpression") {
       const root = memberRoot(node);
-      if (root.local) localAccesses += 1;
+      if (isDirectMemberInvocation(node, parent)) {
+        if (!root.local) {
+          foreignMemberCalls += 1;
+          foreignCallProviders.add(root.provider);
+        }
+      } else if (root.local) localAccesses += 1;
       else {
         foreignAccesses += 1;
         foreignProviders.add(root.provider);
@@ -341,10 +389,21 @@ function calculateMetrics(
 
     const nextNesting = nesting + (STRUCTURAL_TYPES.has(node.type) ? 1 : 0);
     maxNesting = Math.max(maxNesting, nextNesting);
-    for (const child of childNodes(node)) visit(child, nextNesting, nextConditionalDepth);
+    for (const child of childNodes(node)) {
+      const isElseIf =
+        node.type === "IfStatement" &&
+        child === node.alternate &&
+        child.type === "IfStatement";
+      visit(
+        child,
+        isElseIf ? nesting : nextNesting,
+        isElseIf ? conditionalDepth : nextConditionalDepth,
+        node,
+      );
+    }
   }
 
-  visit(functionNode, 0, 0);
+  visit(functionNode, 0, 0, null);
   const params = Array.isArray(functionNode.params) ? functionNode.params.length : 0;
   const totalAccesses = localAccesses + foreignAccesses;
   return {
@@ -360,6 +419,8 @@ function calculateMetrics(
     laa: totalAccesses === 0 ? 1 : localAccesses / totalAccesses,
     fdp: foreignProviders.size,
     foreignProviders: [...foreignProviders].sort((a, b) => a.localeCompare(b)),
+    foreignMemberCalls,
+    foreignCallProviders: [...foreignCallProviders].sort((a, b) => a.localeCompare(b)),
     source: source.slice(segmentNode.start, segmentNode.end),
   };
 }
@@ -456,9 +517,26 @@ export function assignDeterministicIds(results: MethodResult[]): MethodResult[] 
   return [...results]
     .sort((a, b) =>
       a.relativePath.localeCompare(b.relativePath) ||
+      a.startOffset - b.startOffset ||
+      a.endOffset - b.endOffset ||
       a.startLine - b.startLine ||
       a.endLine - b.endLine ||
       a.functionName.localeCompare(b.functionName),
     )
     .map((result, index) => ({ ...result, id: `M-${String(index + 1).padStart(6, "0")}` }));
+}
+
+export function deduplicateMethodResults(results: MethodResult[]): MethodResult[] {
+  const unique = new Map<string, MethodResult>();
+  for (const result of results) {
+    const key = [
+      result.relativePath,
+      result.functionType,
+      result.startOffset,
+      result.endOffset,
+      result.functionName,
+    ].join("\u0000");
+    if (!unique.has(key)) unique.set(key, result);
+  }
+  return [...unique.values()];
 }
