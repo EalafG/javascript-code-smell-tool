@@ -398,12 +398,13 @@ test("handles empty and anonymous functions safely", () => {
   assert.equal(results[0].spanLoc, 1);
   assert.equal(results[0].commentLines, 0);
   assert.equal(results[0].blankLines, 0);
+  assert.equal(results[0].delimiterLines, 0);
   assert.equal(results[0].cyclo, 1);
   assert.equal(results[0].laa, 1);
   assert.match(results[1].functionName, /^anonymous@L1:C/);
 });
 
-test("separates code LOC from physical span, comment-only lines, and blank lines", () => {
+test("separates code LOC from physical span, comments, blanks, and delimiter-only lines", () => {
   const [result] = analyze(`function documented(value) {
   // This comment should not count as code.
 
@@ -417,10 +418,34 @@ test("separates code LOC from physical span, comment-only lines, and blank lines
   assert.equal(result.startLine, 1);
   assert.equal(result.endLine, 9);
   assert.equal(result.spanLoc, 9);
-  assert.equal(result.loc, 4);
+  assert.equal(result.loc, 3);
   assert.equal(result.commentLines, 4);
   assert.equal(result.blankLines, 1);
+  assert.equal(result.delimiterLines, 1);
   assert.equal(result.isLongMethod, false);
+});
+
+test("does not count delimiter-only formatting lines as LOC", () => {
+  const results = analyze(`const formatter = {
+  default(w) {
+    return w.globals.seriesTotals.reduce(
+      (a, b) => a + b,
+      0
+    )
+  }
+};`);
+  const method = results.find((result) => result.functionName === "default");
+
+  assert.ok(method);
+  assert.equal(method.startLine, 2);
+  assert.equal(method.endLine, 7);
+  assert.equal(method.spanLoc, 6);
+  assert.equal(method.loc, 4);
+  assert.equal(method.delimiterLines, 2);
+  assert.equal(
+    method.loc + method.commentLines + method.blankLines + method.delimiterLines,
+    method.spanLoc,
+  );
 });
 
 test("assigns deterministic IDs after sorting by relative path and location", () => {
@@ -457,6 +482,7 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.match(lines[1], /"clean ""method"""/);
   assert.ok(CSV_HEADERS.includes("CODE_CATEGORY"));
   assert.ok(CSV_HEADERS.includes("SPAN_LOC"));
+  assert.ok(CSV_HEADERS.includes("DELIMITER_LINES"));
   assert.ok(CSV_HEADERS.includes("COMMENT_LINES"));
   assert.ok(CSV_HEADERS.includes("BLANK_LINES"));
   assert.ok(CSV_HEADERS.includes("LOGICAL_OPS_MAX"));

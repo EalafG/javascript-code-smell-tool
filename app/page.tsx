@@ -547,7 +547,7 @@ export default function Home() {
               <h3>Long Method</h3>
               <p className="formula">LOC ≥ threshold</p>
               <ThresholdInput label="Code LOC threshold" value={thresholds.longLoc} onChange={(longLoc) => setThresholds((value) => ({ ...value, longLoc }))} />
-              <p className="rule-note">LOC counts nonblank, non-comment lines. Physical span, comment lines, and blank lines remain available as separate metrics.</p>
+              <p className="rule-note">LOC counts substantive code lines. Blank, comment-only, and delimiter-only lines are excluded and remain available as separate metrics.</p>
               <label className="switch-row">
                 <input type="checkbox" checked={thresholds.longCompound} onChange={(event) => setThresholds((value) => ({ ...value, longCompound: event.target.checked }))} />
                 <span>Use compound rule</span>
@@ -688,7 +688,7 @@ export default function Home() {
               <table>
                 <thead>
                   <tr>
-                    <th>ID / Method</th><th>File</th><th>Category</th><th>Type</th><th>Lines</th><th title="Nonblank, non-comment lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>LOGICAL_OPS_MAX</th><th title="Auxiliary Sonar-compatible Complex Conditional label">SONAR_CC</th><th>COND_NESTING</th><th title="Access to data: distinct local and foreign type-property tuples">ATD</th><th>ATFD</th><th>LOCAL_ACCESS_COUNT</th><th>LAA</th><th>FDP</th><th title="Resolved coupling tuples / all coupling tuples">TYPE_COVERAGE</th><th>UNKNOWN_ACCESSES</th><th>FOREIGN_MEMBER_CALLS</th><th>Status</th>
+                    <th>ID / Method</th><th>File</th><th>Category</th><th>Type</th><th>Lines</th><th title="Substantive code lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>DELIMITER_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>LOGICAL_OPS_MAX</th><th title="Auxiliary Sonar-compatible Complex Conditional label">SONAR_CC</th><th>COND_NESTING</th><th title="Access to data: distinct local and foreign type-property tuples">ATD</th><th>ATFD</th><th>LOCAL_ACCESS_COUNT</th><th>LAA</th><th>FDP</th><th title="Resolved coupling tuples / all coupling tuples">TYPE_COVERAGE</th><th>UNKNOWN_ACCESSES</th><th>FOREIGN_MEMBER_CALLS</th><th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -703,6 +703,7 @@ export default function Home() {
                       <td>{result.spanLoc}</td>
                       <td>{result.commentLines}</td>
                       <td>{result.blankLines}</td>
+                      <td>{result.delimiterLines}</td>
                       <td>{result.cyclo}</td>
                       <td>{result.maxNesting}</td>
                       <td>{result.nop}</td>
@@ -743,6 +744,7 @@ export default function Home() {
                     <MetricPill label="SPAN_LOC" value={result.spanLoc} />
                     <MetricPill label="COMMENT_LINES" value={result.commentLines} />
                     <MetricPill label="BLANK_LINES" value={result.blankLines} />
+                    <MetricPill label="DELIMITER_LINES" value={result.delimiterLines} />
                     <MetricPill label="CYCLO" value={result.cyclo} />
                     <MetricPill label="MAXNESTING" value={result.maxNesting} />
                     <MetricPill label="CONDOPS_MAX" value={result.condOpsMax} />

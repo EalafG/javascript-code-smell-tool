@@ -1,8 +1,8 @@
 import { DEFAULT_THRESHOLDS } from "./analyzer.ts";
 import type { MethodResult, Thresholds } from "./analyzer.ts";
 
-export const CSV_SCHEMA_VERSION = "2.1.0";
-export const DETECTOR_VERSION = "0.3.0";
+export const CSV_SCHEMA_VERSION = "2.2.0";
+export const DETECTOR_VERSION = "0.4.0";
 
 export type CsvExportContext = {
   thresholds: Thresholds;
@@ -30,6 +30,7 @@ export const CSV_HEADERS = [
   "SPAN_LOC",
   "COMMENT_LINES",
   "BLANK_LINES",
+  "DELIMITER_LINES",
   "CYCLO",
   "MAXNESTING",
   "NOP",
@@ -129,6 +130,7 @@ export function toCsv(results: MethodResult[], context: CsvExportContext = defau
       result.spanLoc,
       result.commentLines,
       result.blankLines,
+      result.delimiterLines,
       result.cyclo,
       result.maxNesting,
       result.nop,

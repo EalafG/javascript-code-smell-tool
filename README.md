@@ -38,14 +38,15 @@ The interface accepts individual `.js`, `.mjs`, `.cjs`, and `.jsx` files, a comp
 
 ## Method-level metrics
 
-Every function declaration, function expression, arrow function, object method, and ES6 class method becomes one deterministic dataset row. Nested functions are independent rows and are excluded from their parent's AST-traversal metrics. Their declaration source remains part of the parent's physical/code line counts because it is textually inside the parent segment.
+Every function declaration, function expression, arrow function, object method, and ES6 class method becomes one deterministic dataset row. Nested functions are independent rows and are excluded from their parent's AST-traversal metrics. Their substantive declaration source remains part of the parent's physical/code line counts because it is textually inside the parent segment.
 
 The exported metrics are:
 
-- `LOC`: nonblank, non-comment source lines for the function or method segment; lines containing code plus a trailing comment count as code
+- `LOC`: substantive source lines for the function or method segment; blank, comment-only, and delimiter-only lines are excluded, while lines containing code plus a trailing comment count as code
 - `SPAN_LOC`: inclusive physical source lines from the segment start to end
 - `COMMENT_LINES`: nonblank lines containing only comment text
 - `BLANK_LINES`: blank or whitespace-only lines
+- `DELIMITER_LINES`: lines whose comment-stripped content contains only `(`, `)`, `[`, `]`, `{`, `}`, `;`, or `,`; these formatting-only lines are excluded from `LOC`
 - `CYCLO`: extended McCabe-style cyclomatic complexity with a baseline of 1; JavaScript short-circuit `&&` and `||` operators contribute execution paths
 - `MAXNESTING`: maximum control-structure nesting depth; an `else if` chain remains at one nesting level
 - `NOP`: number of parameters
@@ -77,7 +78,7 @@ The exported metrics are:
 
 Defaults are visible and editable in the interface:
 
-- Long Method: `LOC >= 31`, where `LOC` excludes blank and comment-only lines
+- Long Method: `LOC >= 31`, where `LOC` excludes blank, comment-only, and delimiter-only lines
 - Optional compound Long Method: `LOC >= 31 AND (CYCLO >= 10 OR MAXNESTING >= 5)`
 - Complex Method: `CYCLO >= 10`
 - Complex Conditional: `CONDOPS_MAX >= 5`
@@ -105,10 +106,10 @@ The paper uses JIPDA abstract interpretation and runtime-address abstractions. T
 CSV exports use one row per method and a fixed column order:
 
 ```text
-ID,PROJECT,FILE,CODE_CATEGORY,FUNCTION,FUNCTION_TYPE,START_LINE,END_LINE,LOC,SPAN_LOC,COMMENT_LINES,BLANK_LINES,CYCLO,MAXNESTING,NOP,NOLV,CONDOPS_MAX,LOGICAL_OPS_MAX,COND_NESTING,NUM_CONDITIONS,ATD,ATFD,LOCAL_ACCESS_COUNT,LAA,LAA_EXACT,FDP,FOREIGN_PROVIDERS,COUPLING_TUPLES,TYPE_INFERENCE_COVERAGE,UNKNOWN_ACCESS_COUNT,FE_INFERENCE_MODE,FE_MAX_ITERATIONS,FE_TYPE_SET_LIMIT,FE_BATCH_ID,FE_BATCH_FILE_COUNT,FE_BATCH_SIZE_LIMIT,FE_SCOPE,FE_INDEXED_FILE_COUNT,FOREIGN_MEMBER_CALLS,FOREIGN_CALL_PROVIDERS,CSV_SCHEMA_VERSION,DETECTOR_VERSION,PARSER_VERSION,FILES_SELECTED,FILES_ANALYZED,PARSE_FAILURE_COUNT,LONG_LOC_THRESHOLD,LONG_COMPOUND_ENABLED,LONG_CYCLO_THRESHOLD,LONG_NESTING_THRESHOLD,COMPLEX_CYCLO_THRESHOLD,CONDITIONAL_OPS_THRESHOLD,CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED,FEW_THRESHOLD,is_long_method,is_complex_method,is_complex_conditional,is_complex_conditional_sonar,is_feature_envy,is_smelly,SMELL_COUNT,SMELL_TYPES
+ID,PROJECT,FILE,CODE_CATEGORY,FUNCTION,FUNCTION_TYPE,START_LINE,END_LINE,LOC,SPAN_LOC,COMMENT_LINES,BLANK_LINES,DELIMITER_LINES,CYCLO,MAXNESTING,NOP,NOLV,CONDOPS_MAX,LOGICAL_OPS_MAX,COND_NESTING,NUM_CONDITIONS,ATD,ATFD,LOCAL_ACCESS_COUNT,LAA,LAA_EXACT,FDP,FOREIGN_PROVIDERS,COUPLING_TUPLES,TYPE_INFERENCE_COVERAGE,UNKNOWN_ACCESS_COUNT,FE_INFERENCE_MODE,FE_MAX_ITERATIONS,FE_TYPE_SET_LIMIT,FE_BATCH_ID,FE_BATCH_FILE_COUNT,FE_BATCH_SIZE_LIMIT,FE_SCOPE,FE_INDEXED_FILE_COUNT,FOREIGN_MEMBER_CALLS,FOREIGN_CALL_PROVIDERS,CSV_SCHEMA_VERSION,DETECTOR_VERSION,PARSER_VERSION,FILES_SELECTED,FILES_ANALYZED,PARSE_FAILURE_COUNT,LONG_LOC_THRESHOLD,LONG_COMPOUND_ENABLED,LONG_CYCLO_THRESHOLD,LONG_NESTING_THRESHOLD,COMPLEX_CYCLO_THRESHOLD,CONDITIONAL_OPS_THRESHOLD,CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED,FEW_THRESHOLD,is_long_method,is_complex_method,is_complex_conditional,is_complex_conditional_sonar,is_feature_envy,is_smelly,SMELL_COUNT,SMELL_TYPES
 ```
 
-Schema `2.1.0` uses detector `0.3.0`. Binary labels use `0` and `1`. Multi-valued providers and smell types use `|`. Values containing commas, quotes, or line breaks are escaped according to CSV conventions. Each dataset row repeats the schema version, detector version, parser version, file counts, parse-failure count, and active thresholds so the labels can be reproduced independently. Parsing failures can also be exported as a separate deterministic CSV manifest.
+Schema `2.2.0` uses detector `0.4.0`. Binary labels use `0` and `1`. Multi-valued providers and smell types use `|`. Values containing commas, quotes, or line breaks are escaped according to CSV conventions. Each dataset row repeats the schema version, detector version, parser version, file counts, parse-failure count, and active thresholds so the labels can be reproduced independently. Parsing failures can also be exported as a separate deterministic CSV manifest.
 
 ## Reliability checks
 
@@ -119,4 +120,4 @@ pnpm lint
 pnpm build
 ```
 
-The tests cover duplicate avoidance, nested-function isolation, JSX, optional chaining, empty and anonymous functions, metric calculations, distinct coupling tuples, call-site parameter flow, `this`-hierarchy locality, aliases, array-index normalization, property additions/updates, inference uncertainty, deterministic IDs, the browser-local Acorn bundle, and CSV escaping.
+The tests cover duplicate avoidance, nested-function isolation, JSX, optional chaining, empty and anonymous functions, substantive/comment/blank/delimiter line classification, metric calculations, distinct coupling tuples, call-site parameter flow, `this`-hierarchy locality, aliases, array-index normalization, property additions/updates, inference uncertainty, deterministic IDs, the browser-local Acorn bundle, and CSV escaping.

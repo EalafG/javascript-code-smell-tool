@@ -77,6 +77,7 @@ export type MethodResult = {
   spanLoc: number;
   commentLines: number;
   blankLines: number;
+  delimiterLines: number;
   cyclo: number;
   maxNesting: number;
   nop: number;
@@ -135,7 +136,7 @@ type AstComment = {
   end: number;
 };
 
-type SourceLineKind = "code" | "comment" | "blank";
+type SourceLineKind = "code" | "comment" | "blank" | "delimiter";
 
 export type ParsedSource = {
   ast: AstNode;
@@ -356,7 +357,9 @@ function classifySourceLines(source: string, comments: AstComment[]): SourceLine
   const commentStrippedLines = strippedParts.join("").split(/\r\n|\r|\n/);
   return originalLines.map((line, index) => {
     if (!line.trim()) return "blank";
-    if (!(commentStrippedLines[index] ?? "").trim()) return "comment";
+    const commentStrippedLine = (commentStrippedLines[index] ?? "").trim();
+    if (!commentStrippedLine) return "comment";
+    if (/^[()[\]{};,]+$/.test(commentStrippedLine)) return "delimiter";
     return "code";
   });
 }
@@ -367,11 +370,13 @@ function measureSegmentLines(segmentNode: AstNode, sourceLineKinds: SourceLineKi
   let loc = 0;
   let commentLines = 0;
   let blankLines = 0;
+  let delimiterLines = 0;
 
   for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
     const kind = sourceLineKinds[lineNumber - 1] ?? "code";
     if (kind === "blank") blankLines += 1;
     else if (kind === "comment") commentLines += 1;
+    else if (kind === "delimiter") delimiterLines += 1;
     else loc += 1;
   }
 
@@ -384,6 +389,7 @@ function measureSegmentLines(segmentNode: AstNode, sourceLineKinds: SourceLineKi
     spanLoc: Math.max(1, endLine - startLine + 1),
     commentLines,
     blankLines,
+    delimiterLines,
   };
 }
 
