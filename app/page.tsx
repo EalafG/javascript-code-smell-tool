@@ -32,7 +32,7 @@ declare global {
 type ParserStatus = "loading" | "ready" | "unavailable" | "parse-error";
 type ResultTab = "dataset" | "segments" | "distribution";
 type StatusFilter = "all" | "clean" | "smelly";
-type SmellFilter = "all" | "long" | "complex" | "conditional" | "conditional-sonar" | "envy";
+type SmellFilter = "all" | "long" | "complex" | "conditional" | "envy";
 
 type SelectedFile = {
   file: File;
@@ -153,6 +153,7 @@ export default function Home() {
   const [smellFilter, setSmellFilter] = useState<SmellFilter>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [showAdvancedMetrics, setShowAdvancedMetrics] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -219,7 +220,6 @@ export default function Home() {
       long: count((result) => result.isLongMethod),
       complex: count((result) => result.isComplexMethod),
       conditional: count((result) => result.isComplexConditional),
-      conditionalSonar: count((result) => result.isComplexConditionalSonar),
       envy: count((result) => result.isFeatureEnvy),
     };
   }, [results]);
@@ -232,7 +232,6 @@ export default function Home() {
       if (smellFilter === "long" && !result.isLongMethod) return false;
       if (smellFilter === "complex" && !result.isComplexMethod) return false;
       if (smellFilter === "conditional" && !result.isComplexConditional) return false;
-      if (smellFilter === "conditional-sonar" && !result.isComplexConditionalSonar) return false;
       if (smellFilter === "envy" && !result.isFeatureEnvy) return false;
       if (query && !`${result.relativePath} ${result.functionName}`.toLowerCase().includes(query)) return false;
       return true;
@@ -365,15 +364,18 @@ export default function Home() {
     "parse-error": "Parse error",
   }[parserStatus];
 
-  const summaryCards = [
-    ["Files analyzed", filesAnalyzed, "Successful source files"],
-    ["Methods analyzed", stats.methods, "Method-level rows"],
+  const overviewCards = [
+    ["Files analyzed", filesAnalyzed, parseFailures.length ? `${parseFailures.length} parse failure${parseFailures.length === 1 ? "" : "s"} isolated` : filesSubmitted ? "All submitted files parsed" : "Awaiting analysis"],
+    ["Methods analyzed", stats.methods, filesAnalyzed ? `${(stats.methods / filesAnalyzed).toFixed(1)} methods per parsed file` : "Method-level dataset rows"],
     ["Clean", stats.clean, stats.methods ? `${((stats.clean / stats.methods) * 100).toFixed(1)}% of methods` : "0.0% of methods"],
     ["Smelly", stats.smelly, stats.methods ? `${((stats.smelly / stats.methods) * 100).toFixed(1)}% of methods` : "0.0% of methods"],
-    ["Long Method", stats.long, "Binary label count"],
-    ["Complex Method", stats.complex, "Binary label count"],
-    ["Complex Conditional", stats.conditional, `Broad label · Sonar-compatible auxiliary: ${stats.conditionalSonar}`],
-    ["Feature Envy", stats.envy, "Binary label count"],
+  ] as const;
+
+  const smellCards = [
+    ["Long Method", stats.long, "LOC"],
+    ["Complex Method", stats.complex, "CYCLO"],
+    ["Complex Conditional", stats.conditional, "CONDOPS_MAX"],
+    ["Feature Envy", stats.envy, "ATFD · LAA · FDP"],
   ] as const;
 
   const distribution = [
@@ -391,7 +393,7 @@ export default function Home() {
             <img src={publicAsset("upm-logo.jpg")} alt="Universiti Putra Malaysia" className="upm-logo" />
           </div>
           <div className="hero__copy">
-            <p className="eyebrow">RESEARCH SOFTWARE · METHOD-LEVEL ANALYSIS</p>
+            <p className="eyebrow">UPM · RESEARCH SOFTWARE</p>
             <h1>JavaScript Code Smell Detection Tool</h1>
             <p className="subtitle">
               Method-Level Detection of Long Method, Complex Method, Complex Conditional, and Feature Envy
@@ -411,8 +413,8 @@ export default function Home() {
         <section className="panel intake-panel" aria-labelledby="source-heading">
           <div className="section-heading">
             <div>
-              <p className="section-kicker">01 · SOURCE INPUT</p>
-              <h2 id="source-heading">Build your research dataset</h2>
+              <p className="section-kicker">01 · SOURCE</p>
+              <h2 id="source-heading">Analyze JavaScript locally</h2>
               <p>
                 Analyze files, a project folder, or a pasted JavaScript sample. Processing stays on this device.
               </p>
@@ -490,36 +492,46 @@ export default function Home() {
             )}
           </div>
 
-          <fieldset className="ignore-options">
-            <legend>Skip dependency and generated directories</legend>
-            {Object.keys(ignoredFolders).map((folder) => (
-              <label key={folder}>
-                <input
-                  type="checkbox"
-                  checked={ignoredFolders[folder]}
-                  onChange={(event) => setIgnoredFolders((current) => ({ ...current, [folder]: event.target.checked }))}
-                />
-                <span>{folder}</span>
-              </label>
-            ))}
-          </fieldset>
+          <details className="source-options">
+            <summary>
+              <span>Exclusion options</span>
+              <small>
+                {Object.values(ignoredFolders).filter(Boolean).length} folder rules active · {Object.values(excludedCategories).filter(Boolean).length} categories excluded
+              </small>
+            </summary>
+            <div className="source-options__body">
+              <fieldset className="ignore-options">
+                <legend>Skip dependency and generated directories</legend>
+                {Object.keys(ignoredFolders).map((folder) => (
+                  <label key={folder}>
+                    <input
+                      type="checkbox"
+                      checked={ignoredFolders[folder]}
+                      onChange={(event) => setIgnoredFolders((current) => ({ ...current, [folder]: event.target.checked }))}
+                    />
+                    <span>{folder}</span>
+                  </label>
+                ))}
+              </fieldset>
 
-          <fieldset className="ignore-options">
-            <legend>Optionally exclude source categories</legend>
-            {Object.entries(CATEGORY_LABELS).map(([category, label]) => (
-              <label key={category}>
-                <input
-                  type="checkbox"
-                  checked={excludedCategories[category as Exclude<SourceCategory, "production">]}
-                  onChange={(event) => setExcludedCategories((current) => ({
-                    ...current,
-                    [category]: event.target.checked,
-                  }))}
-                />
-                <span>{label}</span>
-              </label>
-            ))}
-          </fieldset>
+              <fieldset className="ignore-options">
+                <legend>Optionally exclude source categories</legend>
+                {Object.entries(CATEGORY_LABELS).map(([category, label]) => (
+                  <label key={category}>
+                    <input
+                      type="checkbox"
+                      checked={excludedCategories[category as Exclude<SourceCategory, "production">]}
+                      onChange={(event) => setExcludedCategories((current) => ({
+                        ...current,
+                        [category]: event.target.checked,
+                      }))}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </fieldset>
+            </div>
+          </details>
 
           {isAnalyzing && (
             <div className="progress-track" aria-label={`Analyzed ${progress.current} of ${progress.total} files`}>
@@ -547,7 +559,7 @@ export default function Home() {
               <h3>Long Method</h3>
               <p className="formula">LOC ≥ threshold</p>
               <ThresholdInput label="Code LOC threshold" value={thresholds.longLoc} onChange={(longLoc) => setThresholds((value) => ({ ...value, longLoc }))} />
-              <p className="rule-note">LOC counts substantive code lines. Blank, comment-only, and delimiter-only lines are excluded and remain available as separate metrics.</p>
+              <p className="rule-note">Substantive code lines only.</p>
               <label className="switch-row">
                 <input type="checkbox" checked={thresholds.longCompound} onChange={(event) => setThresholds((value) => ({ ...value, longCompound: event.target.checked }))} />
                 <span>Use compound rule</span>
@@ -557,6 +569,10 @@ export default function Home() {
                 <span className="operator-word">OR</span>
                 <ThresholdInput label="Nesting" value={thresholds.longNesting} onChange={(longNesting) => setThresholds((value) => ({ ...value, longNesting }))} />
               </div>
+              <details className="methodology-details">
+                <summary>Metric definition</summary>
+                <p>Blank, comment-only, and delimiter-only lines are excluded. SPAN_LOC and each excluded line category remain available in the detailed view and CSV.</p>
+              </details>
             </article>
 
             <article className="rule-card">
@@ -572,9 +588,14 @@ export default function Home() {
               <h3>Complex Conditional</h3>
               <p className="formula">CONDOPS_MAX ≥ threshold</p>
               <ThresholdInput label="Condition operators" value={thresholds.conditionalOps} onChange={(conditionalOps) => setThresholds((value) => ({ ...value, conditionalOps }))} />
-              <p className="formula">Sonar-compatible: LOGICAL_OPS_MAX &gt; allowed maximum</p>
-              <ThresholdInput label="Logical operators allowed" value={thresholds.conditionalLogicalOpsMax} onChange={(conditionalLogicalOpsMax) => setThresholds((value) => ({ ...value, conditionalLogicalOpsMax }))} />
-              <p className="rule-note">The primary research label counts !, &&, ||, equality, inequality, and relational operators with the broad threshold. The auxiliary Sonar-compatible label counts only &&, ||, and ternary operators, permits three, and does not alter CLEAN/SMELLY or the four primary labels. Switch cases affect CYCLO, not conditional-expression metrics.</p>
+              <p className="rule-note">Maximum operator count in one condition.</p>
+              <details className="methodology-details">
+                <summary>Operators and auxiliary comparison</summary>
+                <p>The primary label counts !, &amp;&amp;, ||, equality, inequality, and relational operators. Switch cases affect CYCLO, not this metric.</p>
+                <p className="formula formula--compact">Auxiliary: LOGICAL_OPS_MAX &gt; allowed maximum</p>
+                <ThresholdInput label="Logical operators allowed" value={thresholds.conditionalLogicalOpsMax} onChange={(conditionalLogicalOpsMax) => setThresholds((value) => ({ ...value, conditionalLogicalOpsMax }))} />
+                <p>The auxiliary Sonar-compatible comparison counts only &amp;&amp;, ||, and ternary operators. It does not alter CLEAN/SMELLY or the four primary labels.</p>
+              </details>
             </article>
 
             <article className="rule-card">
@@ -582,7 +603,12 @@ export default function Home() {
               <h3>Feature Envy</h3>
               <p className="formula">ATFD &gt; FEW ∧ LAA &lt; ⅓ ∧ FDP ≤ FEW</p>
               <ThresholdInput label="FEW" value={thresholds.few} onChange={(few) => setThresholds((value) => ({ ...value, few }))} />
-              <p className="rule-note">Paper-inspired static object-type inference uses one project-wide model across every successfully parsed file. ATD/ATFD use distinct type-property tuples; member calls are included, array indices become <code>IDX</code>, and nested functions remain independent. Exact local-access counts, project scope, coverage, and unresolved accesses are exported. The solve uses 12 iterations and a 12-type widening limit. This is not the paper&apos;s full JIPDA abstract interpreter.</p>
+              <p className="rule-note">Project-wide, type-aware data locality.</p>
+              <details className="methodology-details">
+                <summary>Inference methodology</summary>
+                <p>Paper-inspired static object-type inference uses one project-wide model. ATD/ATFD use distinct type-property tuples; member calls are included, array indices become <code>IDX</code>, and nested functions remain independent.</p>
+                <p>Coverage, unresolved accesses, exact local-access counts, and inference provenance are exported. This is an approximation—not the paper&apos;s full JIPDA abstract interpreter.</p>
+              </details>
             </article>
           </div>
         </section>
@@ -597,13 +623,29 @@ export default function Home() {
           </div>
 
           <div className="summary-grid">
-            {summaryCards.map(([label, value, detail], index) => (
+            {overviewCards.map(([label, value, detail], index) => (
               <article className={`summary-card ${index === 3 ? "summary-card--accent" : ""}`} key={label}>
                 <span>{label}</span>
                 <strong>{value.toLocaleString()}</strong>
                 <small>{detail}</small>
               </article>
             ))}
+          </div>
+
+          <div className="smell-summary-grid" aria-label="Primary smell counts">
+            {smellCards.map(([label, value, metric]) => {
+              const percentage = stats.methods ? (value / stats.methods) * 100 : 0;
+              return (
+                <article className="smell-summary-card" key={label}>
+                  <div>
+                    <span>{label}</span>
+                    <small>{metric}</small>
+                  </div>
+                  <strong>{value.toLocaleString()}</strong>
+                  <span>{percentage.toFixed(1)}%</span>
+                </article>
+              );
+            })}
           </div>
 
           {parseFailures.length > 0 && (
@@ -663,8 +705,7 @@ export default function Home() {
                   <option value="all">All four smells</option>
                   <option value="long">Long Method</option>
                   <option value="complex">Complex Method</option>
-                  <option value="conditional">Complex Conditional (broad)</option>
-                  <option value="conditional-sonar">Complex Conditional (Sonar-compatible)</option>
+                  <option value="conditional">Complex Conditional</option>
                   <option value="envy">Feature Envy</option>
                 </select>
               </label>
@@ -672,6 +713,12 @@ export default function Home() {
                 <span className="visually-hidden">Search by file or function name</span>
                 <input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search file or function…" />
               </label>
+              {activeTab === "dataset" && (
+                <label className="metrics-toggle">
+                  <input type="checkbox" checked={showAdvancedMetrics} onChange={(event) => setShowAdvancedMetrics(event.target.checked)} />
+                  <span>Advanced metrics</span>
+                </label>
+              )}
             </div>
           )}
 
@@ -685,10 +732,40 @@ export default function Home() {
 
           {results.length > 0 && activeTab === "dataset" && (
             <div className="table-wrap">
-              <table>
+              <table className={showAdvancedMetrics ? "table--advanced" : ""}>
                 <thead>
                   <tr>
-                    <th>ID / Method</th><th>File</th><th>Category</th><th>Type</th><th>Lines</th><th title="Substantive code lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>DELIMITER_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>LOGICAL_OPS_MAX</th><th title="Auxiliary Sonar-compatible Complex Conditional label">SONAR_CC</th><th>COND_NESTING</th><th title="Access to data: distinct local and foreign type-property tuples">ATD</th><th>ATFD</th><th>LOCAL_ACCESS_COUNT</th><th>LAA</th><th>FDP</th><th title="Resolved coupling tuples / all coupling tuples">TYPE_COVERAGE</th><th>UNKNOWN_ACCESSES</th><th>FOREIGN_MEMBER_CALLS</th><th>Status</th>
+                    <th>ID / Method</th>
+                    <th>File</th>
+                    <th>Category</th>
+                    <th>Type</th>
+                    <th>Lines</th>
+                    <th title="Substantive code lines">LOC</th>
+                    <th>CYCLO</th>
+                    <th>MAXNESTING</th>
+                    <th>CONDOPS_MAX</th>
+                    <th>ATFD</th>
+                    <th>LAA</th>
+                    <th>FDP</th>
+                    {showAdvancedMetrics && (
+                      <>
+                        <th title="Inclusive physical line span">SPAN_LOC</th>
+                        <th>COMMENT_LINES</th>
+                        <th>BLANK_LINES</th>
+                        <th>DELIMITER_LINES</th>
+                        <th>NOP</th>
+                        <th>NOLV</th>
+                        <th>LOGICAL_OPS_MAX</th>
+                        <th title="Auxiliary Sonar-compatible Complex Conditional label">SONAR_CC</th>
+                        <th>COND_NESTING</th>
+                        <th title="Access to data: distinct local and foreign type-property tuples">ATD</th>
+                        <th>LOCAL_ACCESS_COUNT</th>
+                        <th title="Resolved coupling tuples / all coupling tuples">TYPE_COVERAGE</th>
+                        <th>UNKNOWN_ACCESSES</th>
+                        <th>FOREIGN_MEMBER_CALLS</th>
+                      </>
+                    )}
+                    <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -700,26 +777,30 @@ export default function Home() {
                       <td>{result.functionType}</td>
                       <td>{result.startLine}–{result.endLine}</td>
                       <td>{result.loc}</td>
-                      <td>{result.spanLoc}</td>
-                      <td>{result.commentLines}</td>
-                      <td>{result.blankLines}</td>
-                      <td>{result.delimiterLines}</td>
                       <td>{result.cyclo}</td>
                       <td>{result.maxNesting}</td>
-                      <td>{result.nop}</td>
-                      <td>{result.nolv}</td>
                       <td>{result.condOpsMax}</td>
-                      <td>{result.logicalOpsMax}</td>
-                      <td>{Number(result.isComplexConditionalSonar)}</td>
-                      <td>{result.condNesting}</td>
-                      <td>{result.atd}</td>
                       <td>{result.atfd}</td>
-                      <td>{result.localAccessCount}</td>
                       <td>{result.laa.toFixed(3)}</td>
                       <td title={result.foreignProviders.join(" | ")}>{result.fdp}</td>
-                      <td>{result.typeInferenceCoverage.toFixed(3)}</td>
-                      <td>{result.unknownAccessCount}</td>
-                      <td title={result.foreignCallProviders.join(" | ")}>{result.foreignMemberCalls}</td>
+                      {showAdvancedMetrics && (
+                        <>
+                          <td>{result.spanLoc}</td>
+                          <td>{result.commentLines}</td>
+                          <td>{result.blankLines}</td>
+                          <td>{result.delimiterLines}</td>
+                          <td>{result.nop}</td>
+                          <td>{result.nolv}</td>
+                          <td>{result.logicalOpsMax}</td>
+                          <td>{Number(result.isComplexConditionalSonar)}</td>
+                          <td>{result.condNesting}</td>
+                          <td>{result.atd}</td>
+                          <td>{result.localAccessCount}</td>
+                          <td>{result.typeInferenceCoverage.toFixed(3)}</td>
+                          <td>{result.unknownAccessCount}</td>
+                          <td title={result.foreignCallProviders.join(" | ")}>{result.foreignMemberCalls}</td>
+                        </>
+                      )}
                       <td><SmellBadges result={result} /></td>
                     </tr>
                   ))}
@@ -741,27 +822,35 @@ export default function Home() {
                   </div>
                   <div className="metrics-strip">
                     <MetricPill label="LOC" value={result.loc} />
-                    <MetricPill label="SPAN_LOC" value={result.spanLoc} />
-                    <MetricPill label="COMMENT_LINES" value={result.commentLines} />
-                    <MetricPill label="BLANK_LINES" value={result.blankLines} />
-                    <MetricPill label="DELIMITER_LINES" value={result.delimiterLines} />
                     <MetricPill label="CYCLO" value={result.cyclo} />
                     <MetricPill label="MAXNESTING" value={result.maxNesting} />
                     <MetricPill label="CONDOPS_MAX" value={result.condOpsMax} />
-                    <MetricPill label="LOGICAL_OPS_MAX" value={result.logicalOpsMax} />
-                    <MetricPill label="SONAR_CC" value={Number(result.isComplexConditionalSonar)} />
-                    <MetricPill label="ATD" value={result.atd} />
                     <MetricPill label="ATFD" value={result.atfd} />
-                    <MetricPill label="LOCAL_ACCESS_COUNT" value={result.localAccessCount} />
                     <MetricPill label="LAA" value={result.laa.toFixed(3)} />
                     <MetricPill label="FDP" value={result.fdp} />
-                    <MetricPill label="TYPE_COVERAGE" value={result.typeInferenceCoverage.toFixed(3)} />
-                    <MetricPill label="UNKNOWN_ACCESSES" value={result.unknownAccessCount} />
-                    <MetricPill label="FOREIGN_MEMBER_CALLS" value={result.foreignMemberCalls} />
                   </div>
-                  {result.foreignProviders.length > 0 && <p className="provider-line"><strong>Foreign providers:</strong> {result.foreignProviders.join(" · ")}</p>}
-                  {result.foreignCallProviders.length > 0 && <p className="provider-line"><strong>Foreign call providers:</strong> {result.foreignCallProviders.join(" · ")}</p>}
-                  {result.couplingTuples.length > 0 && <p className="provider-line"><strong>Distinct coupling tuples:</strong> {result.couplingTuples.join(" · ")}</p>}
+                  <details className="segment-audit">
+                    <summary>Advanced metrics and Feature Envy evidence</summary>
+                    <div className="metrics-strip metrics-strip--advanced">
+                      <MetricPill label="SPAN_LOC" value={result.spanLoc} />
+                      <MetricPill label="COMMENT_LINES" value={result.commentLines} />
+                      <MetricPill label="BLANK_LINES" value={result.blankLines} />
+                      <MetricPill label="DELIMITER_LINES" value={result.delimiterLines} />
+                      <MetricPill label="NOP" value={result.nop} />
+                      <MetricPill label="NOLV" value={result.nolv} />
+                      <MetricPill label="LOGICAL_OPS_MAX" value={result.logicalOpsMax} />
+                      <MetricPill label="SONAR_CC" value={Number(result.isComplexConditionalSonar)} />
+                      <MetricPill label="COND_NESTING" value={result.condNesting} />
+                      <MetricPill label="ATD" value={result.atd} />
+                      <MetricPill label="LOCAL_ACCESS_COUNT" value={result.localAccessCount} />
+                      <MetricPill label="TYPE_COVERAGE" value={result.typeInferenceCoverage.toFixed(3)} />
+                      <MetricPill label="UNKNOWN_ACCESSES" value={result.unknownAccessCount} />
+                      <MetricPill label="FOREIGN_MEMBER_CALLS" value={result.foreignMemberCalls} />
+                    </div>
+                    {result.foreignProviders.length > 0 && <p className="provider-line"><strong>Foreign providers:</strong> {result.foreignProviders.join(" · ")}</p>}
+                    {result.foreignCallProviders.length > 0 && <p className="provider-line"><strong>Foreign call providers:</strong> {result.foreignCallProviders.join(" · ")}</p>}
+                    {result.couplingTuples.length > 0 && <p className="provider-line"><strong>Distinct coupling tuples:</strong> {result.couplingTuples.join(" · ")}</p>}
+                  </details>
                   <pre><code>{result.source}</code></pre>
                 </article>
               ))}
