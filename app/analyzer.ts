@@ -13,6 +13,7 @@ export type Thresholds = {
   longNesting: number;
   complexCyclo: number;
   conditionalOps: number;
+  conditionalLogicalOpsMax: number;
   few: number;
 };
 
@@ -23,6 +24,7 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
   longNesting: 5,
   complexCyclo: 10,
   conditionalOps: 5,
+  conditionalLogicalOpsMax: 3,
   few: 3,
 };
 
@@ -80,6 +82,7 @@ export type MethodResult = {
   nop: number;
   nolv: number;
   condOpsMax: number;
+  logicalOpsMax: number;
   condNesting: number;
   numConditions: number;
   atd: number;
@@ -104,6 +107,7 @@ export type MethodResult = {
   isLongMethod: boolean;
   isComplexMethod: boolean;
   isComplexConditional: boolean;
+  isComplexConditionalSonar: boolean;
   isFeatureEnvy: boolean;
   isSmelly: boolean;
   smellCount: number;
@@ -283,12 +287,33 @@ function countConditionOperators(expression: AstNode): number {
   return count;
 }
 
+function countLogicalConditionOperators(expression: AstNode): number {
+  let count = 0;
+  function visit(node: AstNode) {
+    if (node.type === "LogicalExpression" && (node.operator === "&&" || node.operator === "||")) {
+      count += 1;
+    } else if (node.type === "ConditionalExpression") {
+      count += 1;
+    }
+    for (const child of childNodes(node)) {
+      if (!isFunctionNode(child)) visit(child);
+    }
+  }
+  visit(expression);
+  return count;
+}
+
 function conditionExpression(node: AstNode): AstNode | null {
   if (["IfStatement", "WhileStatement", "DoWhileStatement", "ConditionalExpression"].includes(node.type)) {
     return isNode(node.test) ? node.test : null;
   }
   if (node.type === "ForStatement") return isNode(node.test) ? node.test : null;
   return null;
+}
+
+function logicalConditionExpression(node: AstNode): AstNode | null {
+  if (node.type === "ConditionalExpression") return node;
+  return conditionExpression(node);
 }
 
 function countPatternBindings(node: unknown): number {
@@ -374,6 +399,7 @@ function calculateMetrics(
   let maxNesting = 0;
   let nolv = 0;
   let condOpsMax = 0;
+  let logicalOpsMax = 0;
   let condNesting = 0;
   let numConditions = 0;
 
@@ -398,6 +424,10 @@ function calculateMetrics(
     if (expression) {
       numConditions += 1;
       condOpsMax = Math.max(condOpsMax, countConditionOperators(expression));
+      const logicalExpression = logicalConditionExpression(node);
+      if (logicalExpression) {
+        logicalOpsMax = Math.max(logicalOpsMax, countLogicalConditionOperators(logicalExpression));
+      }
       condNesting = Math.max(condNesting, nextConditionalDepth);
     }
 
@@ -431,6 +461,7 @@ function calculateMetrics(
     nop: params,
     nolv,
     condOpsMax,
+    logicalOpsMax,
     condNesting,
     numConditions,
     ...featureEnvy,
@@ -445,6 +476,8 @@ export function classifyResult(result: MethodResult, thresholds: Thresholds): Me
     : result.loc >= thresholds.longLoc;
   const isComplexMethod = result.cyclo >= thresholds.complexCyclo;
   const isComplexConditional = result.condOpsMax >= thresholds.conditionalOps;
+  const isComplexConditionalSonar =
+    result.logicalOpsMax > thresholds.conditionalLogicalOpsMax;
   const isFeatureEnvy =
     result.atfd > thresholds.few &&
     result.localAccessCount * 3 < result.atd &&
@@ -462,6 +495,7 @@ export function classifyResult(result: MethodResult, thresholds: Thresholds): Me
     isLongMethod,
     isComplexMethod,
     isComplexConditional,
+    isComplexConditionalSonar,
     isFeatureEnvy,
     isSmelly: smellTypes.length > 0,
     smellCount: smellTypes.length,
@@ -542,6 +576,7 @@ export function analyzeParsedSource(
       isLongMethod: false,
       isComplexMethod: false,
       isComplexConditional: false,
+      isComplexConditionalSonar: false,
       isFeatureEnvy: false,
       isSmelly: false,
       smellCount: 0,

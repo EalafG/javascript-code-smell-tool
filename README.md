@@ -50,7 +50,8 @@ The exported metrics are:
 - `MAXNESTING`: maximum control-structure nesting depth; an `else if` chain remains at one nesting level
 - `NOP`: number of parameters
 - `NOLV`: number of local bindings introduced by variable declarations and catch parameters; destructured identifiers are counted individually
-- `CONDOPS_MAX`: maximum relevant operator count in a single condition
+- `CONDOPS_MAX`: maximum broad operator count in a single condition, including logical, comparison, equality, and negation operators
+- `LOGICAL_OPS_MAX`: maximum `&&`, `||`, and ternary operator count in a single condition for the auxiliary Sonar-compatible comparison
 - `COND_NESTING`: maximum nesting depth of Boolean condition-bearing constructs; switch case labels are excluded and `else if` remains at the parent level
 - `NUM_CONDITIONS`: number of explicit condition sites
 - `ATD`: number of distinct local and foreign `(inferred object type, property)` coupling tuples
@@ -80,6 +81,7 @@ Defaults are visible and editable in the interface:
 - Optional compound Long Method: `LOC >= 31 AND (CYCLO >= 10 OR MAXNESTING >= 5)`
 - Complex Method: `CYCLO >= 10`
 - Complex Conditional: `CONDOPS_MAX >= 5`
+- Auxiliary Sonar-compatible Complex Conditional: `LOGICAL_OPS_MAX > 3`. This comparison is exported separately as `is_complex_conditional_sonar` and does not change `is_complex_conditional`, `is_smelly`, `SMELL_COUNT`, or `SMELL_TYPES`.
 - Feature Envy: `ATFD > FEW AND 3 × LOCAL_ACCESS_COUNT < ATD AND FDP <= FEW`, with `FEW = 3`. The integer comparison is exactly equivalent to `LAA < 1/3` without decimal-rounding ambiguity.
 
 ### Feature Envy inference methodology
@@ -103,10 +105,10 @@ The paper uses JIPDA abstract interpretation and runtime-address abstractions. T
 CSV exports use one row per method and a fixed column order:
 
 ```text
-ID,PROJECT,FILE,CODE_CATEGORY,FUNCTION,FUNCTION_TYPE,START_LINE,END_LINE,LOC,SPAN_LOC,COMMENT_LINES,BLANK_LINES,CYCLO,MAXNESTING,NOP,NOLV,CONDOPS_MAX,COND_NESTING,NUM_CONDITIONS,ATD,ATFD,LOCAL_ACCESS_COUNT,LAA,LAA_EXACT,FDP,FOREIGN_PROVIDERS,COUPLING_TUPLES,TYPE_INFERENCE_COVERAGE,UNKNOWN_ACCESS_COUNT,FE_INFERENCE_MODE,FE_MAX_ITERATIONS,FE_TYPE_SET_LIMIT,FE_BATCH_ID,FE_BATCH_FILE_COUNT,FE_BATCH_SIZE_LIMIT,FE_SCOPE,FE_INDEXED_FILE_COUNT,FOREIGN_MEMBER_CALLS,FOREIGN_CALL_PROVIDERS,CSV_SCHEMA_VERSION,DETECTOR_VERSION,PARSER_VERSION,FILES_SELECTED,FILES_ANALYZED,PARSE_FAILURE_COUNT,LONG_LOC_THRESHOLD,LONG_COMPOUND_ENABLED,LONG_CYCLO_THRESHOLD,LONG_NESTING_THRESHOLD,COMPLEX_CYCLO_THRESHOLD,CONDITIONAL_OPS_THRESHOLD,FEW_THRESHOLD,is_long_method,is_complex_method,is_complex_conditional,is_feature_envy,is_smelly,SMELL_COUNT,SMELL_TYPES
+ID,PROJECT,FILE,CODE_CATEGORY,FUNCTION,FUNCTION_TYPE,START_LINE,END_LINE,LOC,SPAN_LOC,COMMENT_LINES,BLANK_LINES,CYCLO,MAXNESTING,NOP,NOLV,CONDOPS_MAX,LOGICAL_OPS_MAX,COND_NESTING,NUM_CONDITIONS,ATD,ATFD,LOCAL_ACCESS_COUNT,LAA,LAA_EXACT,FDP,FOREIGN_PROVIDERS,COUPLING_TUPLES,TYPE_INFERENCE_COVERAGE,UNKNOWN_ACCESS_COUNT,FE_INFERENCE_MODE,FE_MAX_ITERATIONS,FE_TYPE_SET_LIMIT,FE_BATCH_ID,FE_BATCH_FILE_COUNT,FE_BATCH_SIZE_LIMIT,FE_SCOPE,FE_INDEXED_FILE_COUNT,FOREIGN_MEMBER_CALLS,FOREIGN_CALL_PROVIDERS,CSV_SCHEMA_VERSION,DETECTOR_VERSION,PARSER_VERSION,FILES_SELECTED,FILES_ANALYZED,PARSE_FAILURE_COUNT,LONG_LOC_THRESHOLD,LONG_COMPOUND_ENABLED,LONG_CYCLO_THRESHOLD,LONG_NESTING_THRESHOLD,COMPLEX_CYCLO_THRESHOLD,CONDITIONAL_OPS_THRESHOLD,CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED,FEW_THRESHOLD,is_long_method,is_complex_method,is_complex_conditional,is_complex_conditional_sonar,is_feature_envy,is_smelly,SMELL_COUNT,SMELL_TYPES
 ```
 
-Binary labels use `0` and `1`. Multi-valued providers and smell types use `|`. Values containing commas, quotes, or line breaks are escaped according to CSV conventions. Each dataset row repeats the schema version, detector version, parser version, file counts, parse-failure count, and active thresholds so the labels can be reproduced independently. Parsing failures can also be exported as a separate deterministic CSV manifest.
+Schema `2.1.0` uses detector `0.3.0`. Binary labels use `0` and `1`. Multi-valued providers and smell types use `|`. Values containing commas, quotes, or line breaks are escaped according to CSV conventions. Each dataset row repeats the schema version, detector version, parser version, file counts, parse-failure count, and active thresholds so the labels can be reproduced independently. Parsing failures can also be exported as a separate deterministic CSV manifest.
 
 ## Reliability checks
 

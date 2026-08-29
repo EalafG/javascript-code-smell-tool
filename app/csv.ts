@@ -1,8 +1,8 @@
 import { DEFAULT_THRESHOLDS } from "./analyzer.ts";
 import type { MethodResult, Thresholds } from "./analyzer.ts";
 
-export const CSV_SCHEMA_VERSION = "2.0.0";
-export const DETECTOR_VERSION = "0.2.0";
+export const CSV_SCHEMA_VERSION = "2.1.0";
+export const DETECTOR_VERSION = "0.3.0";
 
 export type CsvExportContext = {
   thresholds: Thresholds;
@@ -35,6 +35,7 @@ export const CSV_HEADERS = [
   "NOP",
   "NOLV",
   "CONDOPS_MAX",
+  "LOGICAL_OPS_MAX",
   "COND_NESTING",
   "NUM_CONDITIONS",
   "ATD",
@@ -69,10 +70,12 @@ export const CSV_HEADERS = [
   "LONG_NESTING_THRESHOLD",
   "COMPLEX_CYCLO_THRESHOLD",
   "CONDITIONAL_OPS_THRESHOLD",
+  "CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED",
   "FEW_THRESHOLD",
   "is_long_method",
   "is_complex_method",
   "is_complex_conditional",
+  "is_complex_conditional_sonar",
   "is_feature_envy",
   "is_smelly",
   "SMELL_COUNT",
@@ -131,6 +134,7 @@ export function toCsv(results: MethodResult[], context: CsvExportContext = defau
       result.nop,
       result.nolv,
       result.condOpsMax,
+      result.logicalOpsMax,
       result.condNesting,
       result.numConditions,
       result.atd,
@@ -165,10 +169,12 @@ export function toCsv(results: MethodResult[], context: CsvExportContext = defau
       context.thresholds.longNesting,
       context.thresholds.complexCyclo,
       context.thresholds.conditionalOps,
+      context.thresholds.conditionalLogicalOpsMax,
       context.thresholds.few,
       Number(result.isLongMethod),
       Number(result.isComplexMethod),
       Number(result.isComplexConditional),
+      Number(result.isComplexConditionalSonar),
       Number(result.isFeatureEnvy),
       Number(result.isSmelly),
       result.smellCount,

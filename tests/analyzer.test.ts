@@ -28,6 +28,7 @@ const thresholds: Thresholds = {
   longNesting: 5,
   complexCyclo: 10,
   conditionalOps: 5,
+  conditionalLogicalOpsMax: 3,
   few: 3,
 };
 
@@ -74,10 +75,35 @@ test("calculates cyclomatic and conditional metrics from explicit operators", ()
   assert.equal(result.cyclo, 8);
   assert.equal(result.maxNesting, 2);
   assert.equal(result.condOpsMax, 7);
+  assert.equal(result.logicalOpsMax, 4);
   assert.equal(result.condNesting, 2);
   assert.equal(result.numConditions, 3);
   assert.equal(result.nop, 6);
   assert.equal(result.isComplexConditional, true);
+  assert.equal(result.isComplexConditionalSonar, true);
+});
+
+test("keeps broad and Sonar-compatible conditional labels independent", () => {
+  const [comparisons, logicalChain] = analyze(`
+function comparisons(a, b) {
+  if (a > 0 && b > 0) return true;
+  return false;
+}
+function logicalChain(a, b, c, d, e) {
+  if (a && b && c && d && e) return true;
+  return false;
+}`);
+
+  assert.equal(comparisons.condOpsMax, 3);
+  assert.equal(comparisons.logicalOpsMax, 1);
+  assert.equal(comparisons.isComplexConditional, false);
+  assert.equal(comparisons.isComplexConditionalSonar, false);
+
+  assert.equal(logicalChain.condOpsMax, 4);
+  assert.equal(logicalChain.logicalOpsMax, 4);
+  assert.equal(logicalChain.isComplexConditional, false);
+  assert.equal(logicalChain.isComplexConditionalSonar, true);
+  assert.equal(logicalChain.isSmelly, false, "the auxiliary label must not alter the primary four-smell dataset");
 });
 
 test("covers every documented cyclomatic decision construct", () => {
@@ -114,6 +140,7 @@ test("does not treat switch case labels as conditional-expression sites", () => 
   assert.equal(result.numConditions, 0);
   assert.equal(result.condNesting, 0);
   assert.equal(result.condOpsMax, 0);
+  assert.equal(result.logicalOpsMax, 0);
 });
 
 test("treats an else-if chain as one nesting level", () => {
@@ -432,6 +459,7 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.ok(CSV_HEADERS.includes("SPAN_LOC"));
   assert.ok(CSV_HEADERS.includes("COMMENT_LINES"));
   assert.ok(CSV_HEADERS.includes("BLANK_LINES"));
+  assert.ok(CSV_HEADERS.includes("LOGICAL_OPS_MAX"));
   assert.ok(CSV_HEADERS.includes("FOREIGN_MEMBER_CALLS"));
   assert.ok(CSV_HEADERS.includes("FOREIGN_CALL_PROVIDERS"));
   assert.ok(CSV_HEADERS.includes("ATD"));
@@ -452,6 +480,8 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.ok(CSV_HEADERS.includes("DETECTOR_VERSION"));
   assert.ok(CSV_HEADERS.includes("PARSER_VERSION"));
   assert.ok(CSV_HEADERS.includes("LONG_LOC_THRESHOLD"));
+  assert.ok(CSV_HEADERS.includes("CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED"));
+  assert.ok(CSV_HEADERS.includes("is_complex_conditional_sonar"));
   assert.ok(CSV_HEADERS.includes("FEW_THRESHOLD"));
   assert.ok(csv.endsWith("\r\n"));
 });

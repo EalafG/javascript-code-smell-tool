@@ -32,7 +32,7 @@ declare global {
 type ParserStatus = "loading" | "ready" | "unavailable" | "parse-error";
 type ResultTab = "dataset" | "segments" | "distribution";
 type StatusFilter = "all" | "clean" | "smelly";
-type SmellFilter = "all" | "long" | "complex" | "conditional" | "envy";
+type SmellFilter = "all" | "long" | "complex" | "conditional" | "conditional-sonar" | "envy";
 
 type SelectedFile = {
   file: File;
@@ -219,6 +219,7 @@ export default function Home() {
       long: count((result) => result.isLongMethod),
       complex: count((result) => result.isComplexMethod),
       conditional: count((result) => result.isComplexConditional),
+      conditionalSonar: count((result) => result.isComplexConditionalSonar),
       envy: count((result) => result.isFeatureEnvy),
     };
   }, [results]);
@@ -231,6 +232,7 @@ export default function Home() {
       if (smellFilter === "long" && !result.isLongMethod) return false;
       if (smellFilter === "complex" && !result.isComplexMethod) return false;
       if (smellFilter === "conditional" && !result.isComplexConditional) return false;
+      if (smellFilter === "conditional-sonar" && !result.isComplexConditionalSonar) return false;
       if (smellFilter === "envy" && !result.isFeatureEnvy) return false;
       if (query && !`${result.relativePath} ${result.functionName}`.toLowerCase().includes(query)) return false;
       return true;
@@ -370,7 +372,7 @@ export default function Home() {
     ["Smelly", stats.smelly, stats.methods ? `${((stats.smelly / stats.methods) * 100).toFixed(1)}% of methods` : "0.0% of methods"],
     ["Long Method", stats.long, "Binary label count"],
     ["Complex Method", stats.complex, "Binary label count"],
-    ["Complex Conditional", stats.conditional, "Binary label count"],
+    ["Complex Conditional", stats.conditional, `Broad label · Sonar-compatible auxiliary: ${stats.conditionalSonar}`],
     ["Feature Envy", stats.envy, "Binary label count"],
   ] as const;
 
@@ -570,7 +572,9 @@ export default function Home() {
               <h3>Complex Conditional</h3>
               <p className="formula">CONDOPS_MAX ≥ threshold</p>
               <ThresholdInput label="Condition operators" value={thresholds.conditionalOps} onChange={(conditionalOps) => setThresholds((value) => ({ ...value, conditionalOps }))} />
-              <p className="rule-note">Counts !, &&, ||, equality, inequality, and relational operators in each Boolean condition. Switch cases affect CYCLO, not conditional-expression metrics.</p>
+              <p className="formula">Sonar-compatible: LOGICAL_OPS_MAX &gt; allowed maximum</p>
+              <ThresholdInput label="Logical operators allowed" value={thresholds.conditionalLogicalOpsMax} onChange={(conditionalLogicalOpsMax) => setThresholds((value) => ({ ...value, conditionalLogicalOpsMax }))} />
+              <p className="rule-note">The primary research label counts !, &&, ||, equality, inequality, and relational operators with the broad threshold. The auxiliary Sonar-compatible label counts only &&, ||, and ternary operators, permits three, and does not alter CLEAN/SMELLY or the four primary labels. Switch cases affect CYCLO, not conditional-expression metrics.</p>
             </article>
 
             <article className="rule-card">
@@ -659,7 +663,8 @@ export default function Home() {
                   <option value="all">All four smells</option>
                   <option value="long">Long Method</option>
                   <option value="complex">Complex Method</option>
-                  <option value="conditional">Complex Conditional</option>
+                  <option value="conditional">Complex Conditional (broad)</option>
+                  <option value="conditional-sonar">Complex Conditional (Sonar-compatible)</option>
                   <option value="envy">Feature Envy</option>
                 </select>
               </label>
@@ -683,7 +688,7 @@ export default function Home() {
               <table>
                 <thead>
                   <tr>
-                    <th>ID / Method</th><th>File</th><th>Category</th><th>Type</th><th>Lines</th><th title="Nonblank, non-comment lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>COND_NESTING</th><th title="Access to data: distinct local and foreign type-property tuples">ATD</th><th>ATFD</th><th>LOCAL_ACCESS_COUNT</th><th>LAA</th><th>FDP</th><th title="Resolved coupling tuples / all coupling tuples">TYPE_COVERAGE</th><th>UNKNOWN_ACCESSES</th><th>FOREIGN_MEMBER_CALLS</th><th>Status</th>
+                    <th>ID / Method</th><th>File</th><th>Category</th><th>Type</th><th>Lines</th><th title="Nonblank, non-comment lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>LOGICAL_OPS_MAX</th><th title="Auxiliary Sonar-compatible Complex Conditional label">SONAR_CC</th><th>COND_NESTING</th><th title="Access to data: distinct local and foreign type-property tuples">ATD</th><th>ATFD</th><th>LOCAL_ACCESS_COUNT</th><th>LAA</th><th>FDP</th><th title="Resolved coupling tuples / all coupling tuples">TYPE_COVERAGE</th><th>UNKNOWN_ACCESSES</th><th>FOREIGN_MEMBER_CALLS</th><th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -703,6 +708,8 @@ export default function Home() {
                       <td>{result.nop}</td>
                       <td>{result.nolv}</td>
                       <td>{result.condOpsMax}</td>
+                      <td>{result.logicalOpsMax}</td>
+                      <td>{Number(result.isComplexConditionalSonar)}</td>
                       <td>{result.condNesting}</td>
                       <td>{result.atd}</td>
                       <td>{result.atfd}</td>
@@ -739,6 +746,8 @@ export default function Home() {
                     <MetricPill label="CYCLO" value={result.cyclo} />
                     <MetricPill label="MAXNESTING" value={result.maxNesting} />
                     <MetricPill label="CONDOPS_MAX" value={result.condOpsMax} />
+                    <MetricPill label="LOGICAL_OPS_MAX" value={result.logicalOpsMax} />
+                    <MetricPill label="SONAR_CC" value={Number(result.isComplexConditionalSonar)} />
                     <MetricPill label="ATD" value={result.atd} />
                     <MetricPill label="ATFD" value={result.atfd} />
                     <MetricPill label="LOCAL_ACCESS_COUNT" value={result.localAccessCount} />
