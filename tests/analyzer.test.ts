@@ -5,13 +5,14 @@ import vm from "node:vm";
 import { Parser } from "acorn";
 import jsx from "acorn-jsx";
 import {
+  classifySourceCategory,
   analyzeProjectSources,
   analyzeSource,
   assignDeterministicIds,
   deduplicateMethodResults,
 } from "../app/analyzer.ts";
 import type { MethodResult, Thresholds } from "../app/analyzer.ts";
-import { CSV_HEADERS, toCsv } from "../app/csv.ts";
+import { CSV_HEADERS, PARSE_FAILURE_HEADERS, toCsv, toParseFailuresCsv } from "../app/csv.ts";
 
 const JsxParser = Parser.extend(jsx());
 const parser = {
@@ -289,12 +290,14 @@ test("reports uncertainty separately from the smell metrics", () => {
   const [unknown] = analyze("function read(customer) { return customer.name; }");
   assert.equal(unknown.unknownAccessCount, 1);
   assert.equal(unknown.typeInferenceCoverage, 0);
-  assert.equal(unknown.feInferenceMode, "batched-project-static-object-type-inference-v1");
+  assert.equal(unknown.feInferenceMode, "project-static-object-type-inference-v2");
   assert.equal(unknown.feMaxIterations, 12);
   assert.equal(unknown.feTypeSetLimit, 12);
-  assert.equal(unknown.feBatchId, "B-0001");
+  assert.equal(unknown.feBatchId, "P-0001");
   assert.equal(unknown.feBatchFileCount, 1);
-  assert.equal(unknown.feBatchSizeLimit, 200);
+  assert.equal(unknown.feBatchSizeLimit, 0);
+  assert.equal(unknown.feScope, "project");
+  assert.equal(unknown.feIndexedFileCount, 1);
 
   const projectResults = analyzeProjectSources(parser, [{
     source: "const customer = { name: 'A' }; function read(value) { return value.name; } read(customer);",
@@ -306,7 +309,7 @@ test("reports uncertainty separately from the smell metrics", () => {
   assert.equal(resolved.typeInferenceCoverage, 1);
 });
 
-test("sorts files into deterministic bounded inference batches", () => {
+test("sorts files into one deterministic project-wide inference model", () => {
   const entries = Array.from({ length: 201 }, (_, index) => {
     const ordinal = String(index + 1).padStart(3, "0");
     return {
@@ -323,10 +326,41 @@ test("sorts files into deterministic bounded inference batches", () => {
   const last = results.find((result) => result.relativePath === "src/file-201.js");
   assert.ok(first);
   assert.ok(last);
-  assert.equal(first.feBatchId, "B-0001");
-  assert.equal(first.feBatchFileCount, 200);
-  assert.equal(last.feBatchId, "B-0002");
-  assert.equal(last.feBatchFileCount, 1);
+  assert.equal(first.feBatchId, "P-0001");
+  assert.equal(first.feBatchFileCount, 201);
+  assert.equal(last.feBatchId, "P-0001");
+  assert.equal(last.feBatchFileCount, 201);
+  assert.equal(first.feScope, "project");
+  assert.equal(last.feIndexedFileCount, 201);
+});
+
+test("uses exact local-access counts at the one-third Feature Envy boundary", () => {
+  const [result] = analyze(`function boundary(customer) {
+  void this.first;
+  void this.second;
+  return customer.name + customer.age + customer.email + customer.status;
+}`);
+
+  assert.equal(result.atd, 6);
+  assert.equal(result.atfd, 4);
+  assert.equal(result.localAccessCount, 2);
+  assert.equal(result.laa, 1 / 3);
+  assert.equal(result.fdp, 1);
+  assert.equal(result.isFeatureEnvy, false);
+  const csv = toCsv(assignDeterministicIds([result]));
+  const values = csv.trimEnd().split("\r\n")[1].split(",");
+  assert.equal(values[CSV_HEADERS.indexOf("LOCAL_ACCESS_COUNT")], "2");
+  assert.equal(values[CSV_HEADERS.indexOf("LAA_EXACT")], "2/6");
+  assert.equal(values[CSV_HEADERS.indexOf("is_feature_envy")], "0");
+});
+
+test("classifies source categories deterministically", () => {
+  assert.equal(classifySourceCategory("atom/src/editor.js"), "production");
+  assert.equal(classifySourceCategory("atom/spec/editor-spec.js"), "test");
+  assert.equal(classifySourceCategory("atom/spec/fixtures/sample.js"), "fixture");
+  assert.equal(classifySourceCategory("atom/vendor/library.js"), "vendor");
+  assert.equal(classifySourceCategory("atom/benchmarks/editor.bench.js"), "benchmark");
+  assert.equal(classifySourceCategory("atom/script/release.js"), "maintenance");
 });
 
 test("handles empty and anonymous functions safely", () => {
@@ -394,12 +428,15 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.match(lines[1], /"Research, ""A"""/);
   assert.match(lines[1], /"src\/a,b\.js"/);
   assert.match(lines[1], /"clean ""method"""/);
-  assert.equal(CSV_HEADERS[8], "SPAN_LOC");
-  assert.equal(CSV_HEADERS[9], "COMMENT_LINES");
-  assert.equal(CSV_HEADERS[10], "BLANK_LINES");
+  assert.ok(CSV_HEADERS.includes("CODE_CATEGORY"));
+  assert.ok(CSV_HEADERS.includes("SPAN_LOC"));
+  assert.ok(CSV_HEADERS.includes("COMMENT_LINES"));
+  assert.ok(CSV_HEADERS.includes("BLANK_LINES"));
   assert.ok(CSV_HEADERS.includes("FOREIGN_MEMBER_CALLS"));
   assert.ok(CSV_HEADERS.includes("FOREIGN_CALL_PROVIDERS"));
   assert.ok(CSV_HEADERS.includes("ATD"));
+  assert.ok(CSV_HEADERS.includes("LOCAL_ACCESS_COUNT"));
+  assert.ok(CSV_HEADERS.includes("LAA_EXACT"));
   assert.ok(CSV_HEADERS.includes("COUPLING_TUPLES"));
   assert.ok(CSV_HEADERS.includes("TYPE_INFERENCE_COVERAGE"));
   assert.ok(CSV_HEADERS.includes("UNKNOWN_ACCESS_COUNT"));
@@ -409,7 +446,25 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.ok(CSV_HEADERS.includes("FE_BATCH_ID"));
   assert.ok(CSV_HEADERS.includes("FE_BATCH_FILE_COUNT"));
   assert.ok(CSV_HEADERS.includes("FE_BATCH_SIZE_LIMIT"));
+  assert.ok(CSV_HEADERS.includes("FE_SCOPE"));
+  assert.ok(CSV_HEADERS.includes("FE_INDEXED_FILE_COUNT"));
+  assert.ok(CSV_HEADERS.includes("CSV_SCHEMA_VERSION"));
+  assert.ok(CSV_HEADERS.includes("DETECTOR_VERSION"));
+  assert.ok(CSV_HEADERS.includes("PARSER_VERSION"));
+  assert.ok(CSV_HEADERS.includes("LONG_LOC_THRESHOLD"));
+  assert.ok(CSV_HEADERS.includes("FEW_THRESHOLD"));
   assert.ok(csv.endsWith("\r\n"));
+});
+
+test("exports parse failures as a stable escaped CSV", () => {
+  const csv = toParseFailuresCsv("Project A", [{
+    file: "src/a,b.js",
+    message: 'Unexpected "token"',
+  }], "Acorn 8.15.0");
+  const lines = csv.trimEnd().split("\r\n");
+  assert.equal(lines[0], PARSE_FAILURE_HEADERS.join(","));
+  assert.match(lines[1], /"src\/a,b\.js"/);
+  assert.match(lines[1], /"Unexpected ""token"""/);
 });
 
 test("ships a browser-local Acorn 8 parser with JSX support", async () => {

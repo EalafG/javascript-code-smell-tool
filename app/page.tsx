@@ -2,11 +2,13 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FEATURE_ENVY_BATCH_SIZE_LIMIT,
+  DEFAULT_THRESHOLDS,
   MethodResult,
-  Thresholds,
+  ParsedSource,
+  SourceCategory,
   analyzeParsedSource,
   assignDeterministicIds,
+  classifySourceCategory,
   classifyResult,
   createProjectAnalysisModel,
   deduplicateMethodResults,
@@ -14,7 +16,7 @@ import {
   indexParsedSource,
   parseJavaScriptSource,
 } from "./analyzer";
-import { downloadCsv } from "./csv";
+import { downloadCsv, downloadParseFailuresCsv } from "./csv";
 
 type ParserApi = {
   parse: (source: string, options: Record<string, unknown>) => never;
@@ -42,19 +44,16 @@ type ParseFailure = {
   message: string;
 };
 
-const DEFAULT_THRESHOLDS: Thresholds = {
-  longLoc: 31,
-  longCompound: false,
-  longCyclo: 10,
-  longNesting: 5,
-  complexCyclo: 10,
-  conditionalOps: 5,
-  few: 3,
-};
-
 const SUPPORTED_EXTENSION = /\.(js|mjs|cjs|jsx)$/i;
 const PAGE_SIZE = 100;
 const publicAsset = (fileName: string) => `${import.meta.env.BASE_URL}${fileName}`;
+const CATEGORY_LABELS: Record<Exclude<SourceCategory, "production">, string> = {
+  test: "Tests and specs",
+  fixture: "Fixtures",
+  vendor: "Vendor code",
+  benchmark: "Benchmarks",
+  maintenance: "Maintenance scripts",
+};
 
 function loadScript(source: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -134,10 +133,18 @@ export default function Home() {
     build: true,
     coverage: true,
   });
+  const [excludedCategories, setExcludedCategories] = useState<Record<Exclude<SourceCategory, "production">, boolean>>({
+    test: false,
+    fixture: false,
+    vendor: false,
+    benchmark: false,
+    maintenance: false,
+  });
   const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
   const [rawResults, setRawResults] = useState<MethodResult[]>([]);
   const [parseFailures, setParseFailures] = useState<ParseFailure[]>([]);
   const [filesAnalyzed, setFilesAnalyzed] = useState(0);
+  const [filesSubmitted, setFilesSubmitted] = useState(0);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [inputMessage, setInputMessage] = useState("");
@@ -185,10 +192,22 @@ export default function Home() {
 
   const activeFiles = useMemo(() => selectedFiles.filter(({ relativePath }) => {
     const pathParts = relativePath.replace(/\\/g, "/").split("/").map((part) => part.toLowerCase());
-    return !Object.entries(ignoredFolders).some(([folder, enabled]) => enabled && pathParts.includes(folder));
-  }), [selectedFiles, ignoredFolders]);
+    if (Object.entries(ignoredFolders).some(([folder, enabled]) => enabled && pathParts.includes(folder))) {
+      return false;
+    }
+    const category = classifySourceCategory(relativePath);
+    return category === "production" || !excludedCategories[category];
+  }), [selectedFiles, ignoredFolders, excludedCategories]);
 
   const skippedFileCount = selectedFiles.length - activeFiles.length;
+
+  const exportContext = useMemo(() => ({
+    thresholds,
+    parserVersion: parserVersion || "Acorn 8+",
+    selectedFileCount: filesSubmitted,
+    successfulFileCount: filesAnalyzed,
+    parseFailureCount: parseFailures.length,
+  }), [thresholds, parserVersion, filesSubmitted, filesAnalyzed, parseFailures.length]);
 
   const stats = useMemo(() => {
     const count = (predicate: (result: MethodResult) => boolean) => results.filter(predicate).length;
@@ -277,63 +296,56 @@ export default function Home() {
     setInputMessage("");
     setParseFailures([]);
     setParserStatus("ready");
+    setFilesSubmitted(sourceEntries.length);
     setProgress({ current: 0, total: sourceEntries.length * 2 });
 
     const failures: ParseFailure[] = [];
     const collected: MethodResult[] = [];
+    const parsedSources: ParsedSource[] = [];
     let successfulFiles = 0;
     let completedWork = 0;
     const totalWork = sourceEntries.length * 2;
-    for (let batchOffset = 0; batchOffset < sourceEntries.length; batchOffset += FEATURE_ENVY_BATCH_SIZE_LIMIT) {
-      const batchNumber = Math.floor(batchOffset / FEATURE_ENVY_BATCH_SIZE_LIMIT) + 1;
-      const batchEntries = sourceEntries.slice(batchOffset, batchOffset + FEATURE_ENVY_BATCH_SIZE_LIMIT);
-      const indexedSources: Array<{
-        source: string;
-        descriptor: { project: string; fileName: string; relativePath: string };
-      }> = [];
-      const inferenceModel = createProjectAnalysisModel(`B-${String(batchNumber).padStart(4, "0")}`);
+    const inferenceModel = createProjectAnalysisModel("P-0001");
 
-      for (const entry of batchEntries) {
-        try {
-          const source = await entry.read();
-          const descriptor = {
-            project: projectName.trim() || "javascript-project",
-            fileName: entry.fileName,
-            relativePath: entry.relativePath,
-          };
-          const parsed = parseJavaScriptSource(window.acorn, source, descriptor);
-          indexParsedSource(inferenceModel, parsed);
-          indexedSources.push({ source, descriptor });
-          completedWork += 1;
-        } catch (error) {
-          failures.push({
-            file: entry.relativePath,
-            message: error instanceof Error ? error.message : String(error),
-          });
-          completedWork += 2;
-        }
-        setProgress({ current: completedWork, total: totalWork });
-        if (completedWork % 12 === 0) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      }
-
-      finalizeProjectAnalysisModel(inferenceModel);
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-
-      for (const entry of indexedSources) {
-        try {
-          const parsed = parseJavaScriptSource(window.acorn, entry.source, entry.descriptor);
-          collected.push(...analyzeParsedSource(parsed, thresholds, inferenceModel));
-          successfulFiles += 1;
-        } catch (error) {
-          failures.push({
-            file: entry.descriptor.relativePath,
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
+    for (const entry of sourceEntries) {
+      try {
+        const source = await entry.read();
+        const descriptor = {
+          project: projectName.trim() || "javascript-project",
+          fileName: entry.fileName,
+          relativePath: entry.relativePath,
+        };
+        const parsed = parseJavaScriptSource(window.acorn, source, descriptor);
+        indexParsedSource(inferenceModel, parsed);
+        parsedSources.push(parsed);
         completedWork += 1;
-        setProgress({ current: completedWork, total: totalWork });
-        if (completedWork % 12 === 0) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      } catch (error) {
+        failures.push({
+          file: entry.relativePath,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        completedWork += 2;
       }
+      setProgress({ current: completedWork, total: totalWork });
+      if (completedWork % 12 === 0) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+
+    finalizeProjectAnalysisModel(inferenceModel);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    for (const parsed of parsedSources) {
+      try {
+        collected.push(...analyzeParsedSource(parsed, thresholds, inferenceModel));
+        successfulFiles += 1;
+      } catch (error) {
+        failures.push({
+          file: parsed.descriptor.relativePath,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      completedWork += 1;
+      setProgress({ current: completedWork, total: totalWork });
+      if (completedWork % 12 === 0) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     }
 
     setRawResults(assignDeterministicIds(deduplicateMethodResults(collected)));
@@ -467,7 +479,7 @@ export default function Home() {
           <div className="selection-bar">
             <div>
               <strong>{activeFiles.length}</strong> supported file{activeFiles.length === 1 ? "" : "s"} ready
-              {skippedFileCount > 0 && <span> · {skippedFileCount} ignored by folder rules</span>}
+              {skippedFileCount > 0 && <span> · {skippedFileCount} ignored by active exclusion rules</span>}
             </div>
             {(selectedFiles.length > 0 || snippet) && (
               <button type="button" className="text-button" onClick={() => { setSelectedFiles([]); setSnippet(""); }}>
@@ -486,6 +498,23 @@ export default function Home() {
                   onChange={(event) => setIgnoredFolders((current) => ({ ...current, [folder]: event.target.checked }))}
                 />
                 <span>{folder}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          <fieldset className="ignore-options">
+            <legend>Optionally exclude source categories</legend>
+            {Object.entries(CATEGORY_LABELS).map(([category, label]) => (
+              <label key={category}>
+                <input
+                  type="checkbox"
+                  checked={excludedCategories[category as Exclude<SourceCategory, "production">]}
+                  onChange={(event) => setExcludedCategories((current) => ({
+                    ...current,
+                    [category]: event.target.checked,
+                  }))}
+                />
+                <span>{label}</span>
               </label>
             ))}
           </fieldset>
@@ -549,7 +578,7 @@ export default function Home() {
               <h3>Feature Envy</h3>
               <p className="formula">ATFD &gt; FEW ∧ LAA &lt; ⅓ ∧ FDP ≤ FEW</p>
               <ThresholdInput label="FEW" value={thresholds.few} onChange={(few) => setThresholds((value) => ({ ...value, few }))} />
-              <p className="rule-note">Paper-inspired static object-type inference in deterministic batches of up to 200 sorted files. ATD/ATFD use distinct type-property tuples; member calls are included, array indices become <code>IDX</code>, and nested functions remain independent. Coverage, batch provenance, and unresolved accesses are exported. Each batch uses 12 solve iterations and a 12-type widening limit. This is not the paper&apos;s full JIPDA abstract interpreter.</p>
+              <p className="rule-note">Paper-inspired static object-type inference uses one project-wide model across every successfully parsed file. ATD/ATFD use distinct type-property tuples; member calls are included, array indices become <code>IDX</code>, and nested functions remain independent. Exact local-access counts, project scope, coverage, and unresolved accesses are exported. The solve uses 12 iterations and a 12-type widening limit. This is not the paper&apos;s full JIPDA abstract interpreter.</p>
             </article>
           </div>
         </section>
@@ -594,8 +623,16 @@ export default function Home() {
               <p>{filteredResults.length.toLocaleString()} of {results.length.toLocaleString()} method-level rows shown</p>
             </div>
             <div className="export-actions">
-              <button className="secondary-button" type="button" disabled={!results.length} onClick={() => downloadCsv(results, "javascript-code-smell-dataset.csv")}>Export all CSV</button>
-              <button className="primary-button" type="button" disabled={!filteredResults.length} onClick={() => downloadCsv(filteredResults, "javascript-code-smell-dataset-filtered.csv")}>Export filtered CSV</button>
+              {parseFailures.length > 0 && (
+                <button className="secondary-button" type="button" onClick={() => downloadParseFailuresCsv(
+                  projectName.trim() || "javascript-project",
+                  parseFailures,
+                  parserVersion || "Acorn 8+",
+                  "javascript-code-smell-parse-failures.csv",
+                )}>Export parse failures</button>
+              )}
+              <button className="secondary-button" type="button" disabled={!results.length} onClick={() => downloadCsv(results, "javascript-code-smell-dataset.csv", exportContext)}>Export all CSV</button>
+              <button className="primary-button" type="button" disabled={!filteredResults.length} onClick={() => downloadCsv(filteredResults, "javascript-code-smell-dataset-filtered.csv", exportContext)}>Export filtered CSV</button>
             </div>
           </div>
 
@@ -646,7 +683,7 @@ export default function Home() {
               <table>
                 <thead>
                   <tr>
-                    <th>ID / Method</th><th>File</th><th>Type</th><th>Lines</th><th title="Nonblank, non-comment lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>COND_NESTING</th><th title="Access to data: distinct local and foreign type-property tuples">ATD</th><th>ATFD</th><th>LAA</th><th>FDP</th><th title="Resolved coupling tuples / all coupling tuples">TYPE_COVERAGE</th><th>UNKNOWN_ACCESSES</th><th>FOREIGN_MEMBER_CALLS</th><th>Status</th>
+                    <th>ID / Method</th><th>File</th><th>Category</th><th>Type</th><th>Lines</th><th title="Nonblank, non-comment lines">LOC</th><th title="Inclusive physical line span">SPAN_LOC</th><th>COMMENT_LINES</th><th>BLANK_LINES</th><th>CYCLO</th><th>MAXNESTING</th><th>NOP</th><th>NOLV</th><th>CONDOPS_MAX</th><th>COND_NESTING</th><th title="Access to data: distinct local and foreign type-property tuples">ATD</th><th>ATFD</th><th>LOCAL_ACCESS_COUNT</th><th>LAA</th><th>FDP</th><th title="Resolved coupling tuples / all coupling tuples">TYPE_COVERAGE</th><th>UNKNOWN_ACCESSES</th><th>FOREIGN_MEMBER_CALLS</th><th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -654,6 +691,7 @@ export default function Home() {
                     <tr key={result.id}>
                       <td><small>{result.id}</small><strong>{result.functionName}</strong></td>
                       <td className="path-cell" title={result.relativePath}>{result.relativePath}</td>
+                      <td>{result.codeCategory}</td>
                       <td>{result.functionType}</td>
                       <td>{result.startLine}–{result.endLine}</td>
                       <td>{result.loc}</td>
@@ -668,6 +706,7 @@ export default function Home() {
                       <td>{result.condNesting}</td>
                       <td>{result.atd}</td>
                       <td>{result.atfd}</td>
+                      <td>{result.localAccessCount}</td>
                       <td>{result.laa.toFixed(3)}</td>
                       <td title={result.foreignProviders.join(" | ")}>{result.fdp}</td>
                       <td>{result.typeInferenceCoverage.toFixed(3)}</td>
@@ -687,7 +726,7 @@ export default function Home() {
                 <article className="segment-card" key={result.id}>
                   <div className="segment-card__header">
                     <div>
-                      <p>{result.id} · {result.relativePath} · Lines {result.startLine}–{result.endLine}</p>
+                      <p>{result.id} · {result.relativePath} · {result.codeCategory} · Lines {result.startLine}–{result.endLine}</p>
                       <h3>{result.functionName}</h3>
                     </div>
                     <SmellBadges result={result} />
@@ -702,6 +741,7 @@ export default function Home() {
                     <MetricPill label="CONDOPS_MAX" value={result.condOpsMax} />
                     <MetricPill label="ATD" value={result.atd} />
                     <MetricPill label="ATFD" value={result.atfd} />
+                    <MetricPill label="LOCAL_ACCESS_COUNT" value={result.localAccessCount} />
                     <MetricPill label="LAA" value={result.laa.toFixed(3)} />
                     <MetricPill label="FDP" value={result.fdp} />
                     <MetricPill label="TYPE_COVERAGE" value={result.typeInferenceCoverage.toFixed(3)} />

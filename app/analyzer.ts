@@ -1,12 +1,10 @@
 import {
-  FEATURE_ENVY_BATCH_SIZE_LIMIT,
   calculateFeatureEnvyMetrics,
   createFeatureEnvyModel,
   finalizeFeatureEnvyModel,
   indexFeatureEnvySource,
 } from "./feature-envy.ts";
 import type { FeatureEnvyModel } from "./feature-envy.ts";
-export { FEATURE_ENVY_BATCH_SIZE_LIMIT } from "./feature-envy.ts";
 
 export type Thresholds = {
   longLoc: number;
@@ -17,6 +15,43 @@ export type Thresholds = {
   conditionalOps: number;
   few: number;
 };
+
+export const DEFAULT_THRESHOLDS: Thresholds = {
+  longLoc: 31,
+  longCompound: false,
+  longCyclo: 10,
+  longNesting: 5,
+  complexCyclo: 10,
+  conditionalOps: 5,
+  few: 3,
+};
+
+export type SourceCategory =
+  | "production"
+  | "test"
+  | "fixture"
+  | "vendor"
+  | "benchmark"
+  | "maintenance";
+
+export function classifySourceCategory(relativePath: string): SourceCategory {
+  const normalized = relativePath.replace(/\\/g, "/").toLowerCase();
+  const parts = normalized.split("/");
+  const fileName = parts.at(-1) ?? normalized;
+  if (parts.includes("fixtures") || parts.includes("fixture")) return "fixture";
+  if (parts.includes("vendor")) return "vendor";
+  if (parts.includes("benchmarks") || parts.includes("benchmark") || fileName.includes(".bench.")) {
+    return "benchmark";
+  }
+  if (
+    parts.some((part) => ["spec", "specs", "test", "tests", "__tests__"].includes(part)) ||
+    /\.(spec|test)\.(?:js|jsx|mjs|cjs)$/i.test(fileName)
+  ) {
+    return "test";
+  }
+  if (parts.includes("script") || parts.includes("scripts")) return "maintenance";
+  return "production";
+}
 
 export type SourceDescriptor = {
   project: string;
@@ -29,6 +64,7 @@ export type MethodResult = {
   project: string;
   fileName: string;
   relativePath: string;
+  codeCategory: SourceCategory;
   functionName: string;
   functionType: string;
   startLine: number;
@@ -48,6 +84,7 @@ export type MethodResult = {
   numConditions: number;
   atd: number;
   atfd: number;
+  localAccessCount: number;
   laa: number;
   fdp: number;
   foreignProviders: string[];
@@ -60,6 +97,8 @@ export type MethodResult = {
   feBatchId: string;
   feBatchFileCount: number;
   feBatchSizeLimit: number;
+  feScope: string;
+  feIndexedFileCount: number;
   foreignMemberCalls: number;
   foreignCallProviders: string[];
   isLongMethod: boolean;
@@ -407,7 +446,9 @@ export function classifyResult(result: MethodResult, thresholds: Thresholds): Me
   const isComplexMethod = result.cyclo >= thresholds.complexCyclo;
   const isComplexConditional = result.condOpsMax >= thresholds.conditionalOps;
   const isFeatureEnvy =
-    result.atfd > thresholds.few && result.laa < 1 / 3 && result.fdp <= thresholds.few;
+    result.atfd > thresholds.few &&
+    result.localAccessCount * 3 < result.atd &&
+    result.fdp <= thresholds.few;
 
   const smellTypes = [
     isLongMethod ? "Long Method" : null,
@@ -461,7 +502,7 @@ export function parseJavaScriptSource(
   return { ast, comments, source, descriptor };
 }
 
-export function createProjectAnalysisModel(batchId = "B-0001"): ProjectAnalysisModel {
+export function createProjectAnalysisModel(batchId = "P-0001"): ProjectAnalysisModel {
   return createFeatureEnvyModel(batchId);
 }
 
@@ -494,6 +535,7 @@ export function analyzeParsedSource(
       project: descriptor.project,
       fileName: descriptor.fileName,
       relativePath: descriptor.relativePath,
+      codeCategory: classifySourceCategory(descriptor.relativePath),
       functionName: candidate.functionName,
       functionType: candidate.functionType,
       ...metrics,
@@ -528,17 +570,11 @@ export function analyzeProjectSources(
   thresholds: Thresholds,
 ): MethodResult[] {
   const sortedEntries = [...entries].sort((a, b) => a.descriptor.relativePath.localeCompare(b.descriptor.relativePath));
-  const results: MethodResult[] = [];
-  for (let offset = 0; offset < sortedEntries.length; offset += FEATURE_ENVY_BATCH_SIZE_LIMIT) {
-    const batchNumber = Math.floor(offset / FEATURE_ENVY_BATCH_SIZE_LIMIT) + 1;
-    const batch = sortedEntries.slice(offset, offset + FEATURE_ENVY_BATCH_SIZE_LIMIT);
-    const parsedSources = batch.map((entry) => parseJavaScriptSource(parser, entry.source, entry.descriptor));
-    const model = createProjectAnalysisModel(`B-${String(batchNumber).padStart(4, "0")}`);
-    for (const parsed of parsedSources) indexParsedSource(model, parsed);
-    finalizeProjectAnalysisModel(model);
-    results.push(...parsedSources.flatMap((parsed) => analyzeParsedSource(parsed, thresholds, model)));
-  }
-  return results;
+  const parsedSources = sortedEntries.map((entry) => parseJavaScriptSource(parser, entry.source, entry.descriptor));
+  const model = createProjectAnalysisModel("P-0001");
+  for (const parsed of parsedSources) indexParsedSource(model, parsed);
+  finalizeProjectAnalysisModel(model);
+  return parsedSources.flatMap((parsed) => analyzeParsedSource(parsed, thresholds, model));
 }
 
 export function assignDeterministicIds(results: MethodResult[]): MethodResult[] {

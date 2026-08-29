@@ -1,7 +1,9 @@
-export const FEATURE_ENVY_INFERENCE_MODE = "batched-project-static-object-type-inference-v1";
+export const FEATURE_ENVY_INFERENCE_MODE = "project-static-object-type-inference-v2";
 export const FEATURE_ENVY_MAX_ITERATIONS = 12;
 export const FEATURE_ENVY_TYPE_SET_LIMIT = 12;
-export const FEATURE_ENVY_BATCH_SIZE_LIMIT = 200;
+// Retained in the export schema for backward compatibility. Zero means that
+// inference is unbounded and uses every successfully parsed project file.
+export const FEATURE_ENVY_BATCH_SIZE_LIMIT = 0;
 
 export type InferenceAstNode = {
   type: string;
@@ -86,6 +88,7 @@ export type FeatureEnvyModel = {
 export type FeatureEnvyMetrics = {
   atd: number;
   atfd: number;
+  localAccessCount: number;
   laa: number;
   fdp: number;
   foreignProviders: string[];
@@ -100,6 +103,8 @@ export type FeatureEnvyMetrics = {
   feBatchId: string;
   feBatchFileCount: number;
   feBatchSizeLimit: number;
+  feScope: string;
+  feIndexedFileCount: number;
 };
 
 type WalkContext = {
@@ -828,7 +833,7 @@ function indexRelations(model: FeatureEnvyModel, ast: InferenceAstNode, source: 
   }, null);
 }
 
-export function createFeatureEnvyModel(batchId = "B-0001"): FeatureEnvyModel {
+export function createFeatureEnvyModel(batchId = "P-0001"): FeatureEnvyModel {
   return {
     variableTypes: new Map(),
     variableAliases: new Map(),
@@ -1026,12 +1031,14 @@ export function calculateFeatureEnvyMetrics(
   }
 
   visit(functionNode, null);
-  const atd = localTuples.size + foreignTuples.size;
+  const localAccessCount = localTuples.size;
+  const atd = localAccessCount + foreignTuples.size;
   const resolvedCount = [...couplingTuples].filter((tuple) => !tuple.includes("unknown:") && !tuple.includes("unresolved:")).length;
   return {
     atd,
     atfd: foreignTuples.size,
-    laa: atd === 0 ? 1 : localTuples.size / atd,
+    localAccessCount,
+    laa: atd === 0 ? 1 : localAccessCount / atd,
     fdp: foreignProviders.size,
     foreignProviders: [...foreignProviders].sort((a, b) => a.localeCompare(b)),
     couplingTuples: [...couplingTuples].sort((a, b) => a.localeCompare(b)),
@@ -1045,5 +1052,7 @@ export function calculateFeatureEnvyMetrics(
     feBatchId: model.batchId,
     feBatchFileCount: model.indexedSources.size,
     feBatchSizeLimit: FEATURE_ENVY_BATCH_SIZE_LIMIT,
+    feScope: "project",
+    feIndexedFileCount: model.indexedSources.size,
   };
 }

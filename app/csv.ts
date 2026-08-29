@@ -1,9 +1,27 @@
-import type { MethodResult } from "./analyzer.ts";
+import { DEFAULT_THRESHOLDS } from "./analyzer.ts";
+import type { MethodResult, Thresholds } from "./analyzer.ts";
+
+export const CSV_SCHEMA_VERSION = "2.0.0";
+export const DETECTOR_VERSION = "0.2.0";
+
+export type CsvExportContext = {
+  thresholds: Thresholds;
+  parserVersion: string;
+  selectedFileCount: number;
+  successfulFileCount: number;
+  parseFailureCount: number;
+};
+
+export type ParseFailureExport = {
+  file: string;
+  message: string;
+};
 
 export const CSV_HEADERS = [
   "ID",
   "PROJECT",
   "FILE",
+  "CODE_CATEGORY",
   "FUNCTION",
   "FUNCTION_TYPE",
   "START_LINE",
@@ -21,7 +39,9 @@ export const CSV_HEADERS = [
   "NUM_CONDITIONS",
   "ATD",
   "ATFD",
+  "LOCAL_ACCESS_COUNT",
   "LAA",
+  "LAA_EXACT",
   "FDP",
   "FOREIGN_PROVIDERS",
   "COUPLING_TUPLES",
@@ -33,8 +53,23 @@ export const CSV_HEADERS = [
   "FE_BATCH_ID",
   "FE_BATCH_FILE_COUNT",
   "FE_BATCH_SIZE_LIMIT",
+  "FE_SCOPE",
+  "FE_INDEXED_FILE_COUNT",
   "FOREIGN_MEMBER_CALLS",
   "FOREIGN_CALL_PROVIDERS",
+  "CSV_SCHEMA_VERSION",
+  "DETECTOR_VERSION",
+  "PARSER_VERSION",
+  "FILES_SELECTED",
+  "FILES_ANALYZED",
+  "PARSE_FAILURE_COUNT",
+  "LONG_LOC_THRESHOLD",
+  "LONG_COMPOUND_ENABLED",
+  "LONG_CYCLO_THRESHOLD",
+  "LONG_NESTING_THRESHOLD",
+  "COMPLEX_CYCLO_THRESHOLD",
+  "CONDITIONAL_OPS_THRESHOLD",
+  "FEW_THRESHOLD",
   "is_long_method",
   "is_complex_method",
   "is_complex_conditional",
@@ -42,6 +77,15 @@ export const CSV_HEADERS = [
   "is_smelly",
   "SMELL_COUNT",
   "SMELL_TYPES",
+] as const;
+
+export const PARSE_FAILURE_HEADERS = [
+  "PROJECT",
+  "FILE",
+  "PARSER_VERSION",
+  "CSV_SCHEMA_VERSION",
+  "DETECTOR_VERSION",
+  "ERROR_MESSAGE",
 ] as const;
 
 const SMELL_EXPORT_NAMES: Record<string, string> = {
@@ -56,13 +100,24 @@ function csvEscape(value: string | number): string {
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-export function toCsv(results: MethodResult[]): string {
+function defaultContext(results: MethodResult[]): CsvExportContext {
+  return {
+    thresholds: DEFAULT_THRESHOLDS,
+    parserVersion: "Acorn 8+",
+    selectedFileCount: new Set(results.map((result) => result.relativePath)).size,
+    successfulFileCount: new Set(results.map((result) => result.relativePath)).size,
+    parseFailureCount: 0,
+  };
+}
+
+export function toCsv(results: MethodResult[], context: CsvExportContext = defaultContext(results)): string {
   const lines = [CSV_HEADERS.join(",")];
   for (const result of results) {
     const row: Array<string | number> = [
       result.id,
       result.project,
       result.relativePath,
+      result.codeCategory,
       result.functionName,
       result.functionType,
       result.startLine,
@@ -80,7 +135,9 @@ export function toCsv(results: MethodResult[]): string {
       result.numConditions,
       result.atd,
       result.atfd,
-      result.laa.toFixed(4),
+      result.localAccessCount,
+      result.laa.toFixed(10),
+      result.atd === 0 ? "1/1" : `${result.localAccessCount}/${result.atd}`,
       result.fdp,
       result.foreignProviders.join("|"),
       result.couplingTuples.join("|"),
@@ -92,8 +149,23 @@ export function toCsv(results: MethodResult[]): string {
       result.feBatchId,
       result.feBatchFileCount,
       result.feBatchSizeLimit,
+      result.feScope,
+      result.feIndexedFileCount,
       result.foreignMemberCalls,
       result.foreignCallProviders.join("|"),
+      CSV_SCHEMA_VERSION,
+      DETECTOR_VERSION,
+      context.parserVersion,
+      context.selectedFileCount,
+      context.successfulFileCount,
+      context.parseFailureCount,
+      context.thresholds.longLoc,
+      Number(context.thresholds.longCompound),
+      context.thresholds.longCyclo,
+      context.thresholds.longNesting,
+      context.thresholds.complexCyclo,
+      context.thresholds.conditionalOps,
+      context.thresholds.few,
       Number(result.isLongMethod),
       Number(result.isComplexMethod),
       Number(result.isComplexConditional),
@@ -107,8 +179,8 @@ export function toCsv(results: MethodResult[]): string {
   return `${lines.join("\r\n")}\r\n`;
 }
 
-export function downloadCsv(results: MethodResult[], filename: string) {
-  const blob = new Blob([toCsv(results)], { type: "text/csv;charset=utf-8" });
+function downloadText(contents: string, filename: string) {
+  const blob = new Blob([contents], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -117,4 +189,36 @@ export function downloadCsv(results: MethodResult[], filename: string) {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+export function downloadCsv(results: MethodResult[], filename: string, context?: CsvExportContext) {
+  downloadText(toCsv(results, context), filename);
+}
+
+export function toParseFailuresCsv(
+  project: string,
+  failures: ParseFailureExport[],
+  parserVersion: string,
+): string {
+  const lines = [PARSE_FAILURE_HEADERS.join(",")];
+  for (const failure of failures) {
+    lines.push([
+      project,
+      failure.file,
+      parserVersion,
+      CSV_SCHEMA_VERSION,
+      DETECTOR_VERSION,
+      failure.message,
+    ].map(csvEscape).join(","));
+  }
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+export function downloadParseFailuresCsv(
+  project: string,
+  failures: ParseFailureExport[],
+  parserVersion: string,
+  filename: string,
+) {
+  downloadText(toParseFailuresCsv(project, failures, parserVersion), filename);
 }
