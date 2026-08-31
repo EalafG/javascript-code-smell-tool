@@ -107,6 +107,20 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mon
   border-radius: 12px;
   background: rgba(36, 3, 12, .18);
 }
+.hero__tools { display: grid; justify-items: end; gap: 8px; }
+.validation-link {
+  padding: 7px 10px;
+  border: 1px solid rgba(255,255,255,.27);
+  border-radius: 8px;
+  color: white;
+  background: rgba(36,3,12,.12);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+.validation-link:hover { background: rgba(255,255,255,.12); }
 .parser-status > span {
   width: 9px;
   height: 9px;
@@ -496,6 +510,8 @@ td:first-child strong { overflow: hidden; color: var(--upm-dark); text-overflow:
 .badge--smell { color: var(--upm-dark-red); border: 1px solid #efd4da; background: #fff7f8; }
 
 .segments-list { padding: 22px 28px 28px; display: grid; gap: 14px; background: #f7f8f9; }
+.segment-view-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.segment-view-toolbar > span { color: var(--upm-gray); font-size: 10px; font-weight: 750; }
 .segment-card { overflow: hidden; border: 1px solid #dde1e3; border-radius: 13px; background: white; box-shadow: 0 7px 20px rgba(39,42,44,.04); }
 .segment-card__header { padding: 17px 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .segment-card__header p { margin: 0 0 6px; color: var(--upm-gray); font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
@@ -510,7 +526,8 @@ td:first-child strong { overflow: hidden; color: var(--upm-dark); text-overflow:
 .metrics-strip--advanced { border-bottom: 0; }
 .provider-line { margin: 0; padding: 9px 18px; overflow-wrap: anywhere; color: var(--upm-gray); background: #fff; font-size: 9px; line-height: 1.5; }
 .provider-line strong { color: var(--upm-dark); }
-.segment-card pre { max-height: 440px; margin: 0; padding: 18px; overflow: auto; color: #e7e8e9; background: #25282a; font-size: 11px; line-height: 1.6; tab-size: 2; white-space: pre; }
+.segment-code-view { max-height: 440px; border-bottom: 0; }
+.segment-code-view .syntax-pre { font-size: 11px; }
 
 .distribution-view { min-height: 390px; padding: 40px; display: grid; grid-template-columns: .7fr 1.3fr; gap: 60px; align-items: start; }
 .distribution-copy h3 { margin: 0; font-size: 25px; letter-spacing: -.025em; }
@@ -535,6 +552,7 @@ footer strong { color: var(--upm-dark); }
 @media (max-width: 1080px) {
   .hero__inner { grid-template-columns: 175px 1fr; padding: 27px 0; }
   .upm-logo-wrap { width: 175px; height: 72px; }
+  .hero__tools { grid-column: 2; justify-items: start; }
   .parser-status { grid-column: 2; margin: 0; justify-self: start; }
   .input-grid { grid-template-columns: 1fr 1fr; }
   .snippet-tile { grid-column: 1 / -1; }
@@ -547,6 +565,7 @@ footer strong { color: var(--upm-dark); }
 
 @media (max-width: 760px) {
   .hero__inner { grid-template-columns: 1fr; gap: 18px; }
+  .hero__tools { grid-column: 1; justify-items: start; }
   .parser-status { grid-column: 1; margin: 0; }
   .section-heading, .results-toolbar, .project-row { display: block; }
   .section-heading > .primary-button { width: 100%; margin-top: 18px; }
@@ -582,6 +601,7 @@ footer strong { color: var(--upm-dark); }
   .segmented-control { width: 100%; }
   .segmented-control button { flex: 1; }
   .segments-list { padding: 16px; }
+  .segment-view-toolbar { align-items: flex-start; flex-direction: column; }
   .segment-card__header { display: grid; }
   .pagination { justify-content: center; flex-wrap: wrap; }
 }

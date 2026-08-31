@@ -1,0 +1,85 @@
+.syntax-shell {
+  --syntax-background: #1f2428;
+  --syntax-gutter: #252b30;
+  --syntax-border: #343b41;
+  --syntax-line-number: #82919c;
+  min-width: 0;
+  overflow: auto;
+  border-top: 1px solid var(--syntax-border);
+  border-bottom: 1px solid var(--syntax-border);
+  background: var(--syntax-background);
+  color: #e8edf1;
+  color-scheme: dark;
+  transition: background .16s ease, border-color .16s ease;
+}
+
+.syntax-shell--light {
+  --syntax-background: #fbfcfd;
+  --syntax-gutter: #f0f2f4;
+  --syntax-border: #d8dde1;
+  --syntax-line-number: #727d85;
+  color: #24292f;
+  color-scheme: light;
+}
+
+.syntax-pre {
+  min-width: max-content;
+  margin: 0;
+  padding: 14px 0;
+  font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  tab-size: 2;
+}
+
+.syntax-pre code { display: block; }
+.syntax-line {
+  min-height: 20px;
+  display: grid;
+  grid-template-columns: 62px minmax(max-content, 1fr);
+}
+.syntax-line:hover { background: color-mix(in srgb, currentColor 4%, transparent); }
+.syntax-line-number {
+  padding: 0 14px 0 10px;
+  color: var(--syntax-line-number);
+  background: var(--syntax-gutter);
+  text-align: right;
+  user-select: none;
+}
+.syntax-line-content { padding: 0 24px 0 16px; white-space: pre; }
+
+.code-theme-control { display: inline-flex; align-items: center; gap: 8px; }
+.code-theme-control > span {
+  color: #6f7478;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.code-theme-control > div {
+  padding: 2px;
+  display: inline-grid;
+  grid-template-columns: repeat(2, 1fr);
+  border: 1px solid #d8dcde;
+  border-radius: 7px;
+  background: #eef0f1;
+}
+.code-theme-control button {
+  min-height: 27px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 5px;
+  color: #62696d;
+  background: transparent;
+  font-size: 9px;
+  font-weight: 850;
+  text-transform: capitalize;
+}
+.code-theme-control button.is-active {
+  color: #8b1029;
+  background: white;
+  box-shadow: 0 2px 6px rgba(39, 42, 44, .1);
+}
+.code-theme-control button:focus-visible {
+  outline: 3px solid rgba(215, 25, 63, .22);
+  outline-offset: 2px;
+}

@@ -17,6 +17,8 @@ import {
   parseJavaScriptSource,
 } from "./analyzer";
 import { downloadCsv, downloadParseFailuresCsv } from "./csv";
+import { useCodeThemePreference } from "./code-theme";
+import { CodeThemeToggle, SyntaxCode } from "./code-viewer";
 
 type ParserApi = {
   parse: (source: string, options: Record<string, unknown>) => never;
@@ -154,6 +156,7 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [showAdvancedMetrics, setShowAdvancedMetrics] = useState(false);
+  const [codeTheme, setCodeTheme] = useCodeThemePreference();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -399,11 +402,14 @@ export default function Home() {
               Method-Level Detection of Long Method, Complex Method, Complex Conditional, and Feature Envy
             </p>
           </div>
-          <div className={`parser-status parser-status--${parserStatus}`} role="status">
-            <span aria-hidden="true" />
-            <div>
-              <strong>{parserLabel}</strong>
-              <small>{parserStatus === "ready" ? `${parserVersion} · local first` : parserStatus === "parse-error" ? `${parseFailures.length} file failure${parseFailures.length === 1 ? "" : "s"}` : "Local → CDN fallback"}</small>
+          <div className="hero__tools">
+            <a className="validation-link" href="./validation/">Open validation workspace</a>
+            <div className={`parser-status parser-status--${parserStatus}`} role="status">
+              <span aria-hidden="true" />
+              <div>
+                <strong>{parserLabel}</strong>
+                <small>{parserStatus === "ready" ? `${parserVersion} · local first` : parserStatus === "parse-error" ? `${parseFailures.length} file failure${parseFailures.length === 1 ? "" : "s"}` : "Local → CDN fallback"}</small>
+              </div>
             </div>
           </div>
         </div>
@@ -811,6 +817,10 @@ export default function Home() {
 
           {results.length > 0 && activeTab === "segments" && (
             <div className="segments-list">
+              <div className="segment-view-toolbar">
+                <span>JavaScript syntax highlighting</span>
+                <CodeThemeToggle theme={codeTheme} onChange={setCodeTheme} />
+              </div>
               {visibleResults.map((result) => (
                 <article className="segment-card" key={result.id}>
                   <div className="segment-card__header">
@@ -851,7 +861,13 @@ export default function Home() {
                     {result.foreignCallProviders.length > 0 && <p className="provider-line"><strong>Foreign call providers:</strong> {result.foreignCallProviders.join(" · ")}</p>}
                     {result.couplingTuples.length > 0 && <p className="provider-line"><strong>Distinct coupling tuples:</strong> {result.couplingTuples.join(" · ")}</p>}
                   </details>
-                  <pre><code>{result.source}</code></pre>
+                  <SyntaxCode
+                    source={result.source}
+                    startLine={result.startLine}
+                    theme={codeTheme}
+                    label={`JavaScript source for ${result.functionName}`}
+                    className="segment-code-view"
+                  />
                 </article>
               ))}
             </div>
