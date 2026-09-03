@@ -53,9 +53,9 @@ const SMELLS: Array<{
 ];
 
 const DECISIONS: Array<{ value: Decision; label: string }> = [
-  { value: "present", label: "Present (clear)" },
-  { value: "absent", label: "Absent (clear)" },
-  { value: "uncertain", label: "Uncertain / borderline" },
+  { value: "present", label: "Present" },
+  { value: "absent", label: "Absent" },
+  { value: "uncertain", label: "Uncertain" },
 ];
 
 const LOCAL_VALIDATOR_KEY = "upm-validation:validator-id";
@@ -803,7 +803,7 @@ function Workspace({
             <div><p className="kicker">YOUR JUDGMENT</p><h2>Four independent decisions</h2></div>
             <span>{SMELLS.filter(({ key }) => decisions[key]).length}/4</span>
           </div>
-          <p className="annotation-intro">Select a clear Present or Absent decision for each smell. Use Uncertain / borderline when a defensible judgment needs missing context.</p>
+          <p className="annotation-intro">Select Present, Absent, or Uncertain for each smell.</p>
           <div className="smell-list">
             {SMELLS.map((smell, index) => (
               <fieldset className="smell-decision" key={smell.key}>
@@ -861,8 +861,8 @@ function Workspace({
               {SMELLS.map((smell) => <article key={smell.key}><h3>{smell.label}</h3><p>{smell.cue}</p></article>)}
             </div>
             <div className="decision-guide">
-              <p><strong>Present (clear)</strong> — sufficient evidence that the smell exists.</p>
-              <p><strong>Absent (clear)</strong> — sufficient evidence that it does not.</p>
+              <p><strong>Present</strong> — sufficient evidence that the smell exists.</p>
+              <p><strong>Absent</strong> — sufficient evidence that it does not.</p>
               <p><strong>Uncertain</strong> — essential context is missing or the evidence is genuinely balanced; explain why.</p>
             </div>
             <p className="dialog-note">Nested functions are separate units. Do not count their control flow or foreign accesses as part of the displayed parent.</p>

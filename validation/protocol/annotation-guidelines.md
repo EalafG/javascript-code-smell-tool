@@ -27,9 +27,9 @@ automatically complex.
 
 ## Decision scale
 
-- **Present (clear)** — the evidence is sufficient to conclude that the smell is
+- **Present** — the evidence is sufficient to conclude that the smell is
   present in the displayed method.
-- **Absent (clear)** — the evidence is sufficient to conclude that the smell is not
+- **Absent** — the evidence is sufficient to conclude that the smell is not
   present.
 - **Uncertain / insufficient context** — a defensible judgment cannot be made
   because context is missing, syntax is unfamiliar/ambiguous, generated code
