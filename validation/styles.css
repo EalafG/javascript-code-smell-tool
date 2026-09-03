@@ -25,10 +25,10 @@ body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
-button, input, textarea { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .52; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible, pre:focus-visible {
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible, pre:focus-visible {
   outline: 3px solid rgba(215, 25, 63, .22);
   outline-offset: 2px;
 }
@@ -92,12 +92,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
   box-shadow: var(--shadow);
 }
 .entry-card--wide { width: min(720px, 100%); }
+.entry-card--declaration { width: min(900px, 100%); }
 .entry-card > img { width: 170px; height: 70px; margin-bottom: 26px; object-fit: contain; }
 .entry-card h1 { margin: 0; font-size: clamp(28px, 5vw, 40px); line-height: 1.08; letter-spacing: -.035em; }
 .entry-card > p:not(.kicker):not(.entry-message):not(.field-help) { margin: 15px 0 0; color: var(--muted); line-height: 1.65; }
 .entry-card form { margin-top: 26px; }
 .entry-card label { display: block; margin-bottom: 8px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
-.entry-card input {
+.entry-card input:not([type="checkbox"]),
+.entry-card select {
   width: 100%;
   height: 44px;
   padding: 0 12px;
@@ -106,6 +108,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
   color: var(--ink);
   background: #fbfcfc;
 }
+.entry-card select { appearance: auto; }
 .entry-card form > .button { width: 100%; margin-top: 13px; }
 .entry-brand { margin-bottom: 26px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .entry-brand img { width: 180px; height: 72px; object-fit: contain; }
@@ -121,6 +124,28 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .privacy-callout { margin-top: 22px; padding: 13px 15px; border-left: 3px solid var(--upm-gold); color: #5f5438; background: #fffaf0; font-size: 11px; line-height: 1.55; }
 .quiet-link { display: inline-block; margin-top: 20px; color: var(--upm-dark-red); font-size: 11px; font-weight: 800; }
 .entry-message { margin: 13px 0 0; color: var(--upm-dark-red); font-size: 12px; }
+.validator-lock { margin-bottom: 19px; padding: 12px 14px; border: 1px solid #e1e4e6; border-radius: 10px; background: #fafbfb; }
+.validator-lock span, .validator-lock strong { display: block; }
+.validator-lock span { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.validator-lock strong { margin-top: 4px; font-size: 15px; }
+.qualification-fields, .declaration-list { margin: 23px 0 0; padding: 0; border: 0; }
+.qualification-fields legend, .declaration-list legend { margin-bottom: 10px; color: var(--ink); font-size: 11px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
+.qualification-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.qualification-grid label { margin: 0; }
+.qualification-grid label > span { display: block; min-height: 28px; margin-bottom: 6px; }
+.declaration-list { display: grid; gap: 8px; }
+.declaration-list legend { margin-bottom: 2px; }
+.declaration-list label { margin: 0; padding: 12px 13px; display: grid; grid-template-columns: 18px 1fr; align-items: start; gap: 10px; border: 1px solid #e1e4e6; border-radius: 10px; background: #fafbfb; font-size: 11px; font-weight: 600; line-height: 1.5; text-transform: none; letter-spacing: 0; cursor: pointer; }
+.declaration-list label:has(input:checked) { border-color: rgba(22,117,83,.42); background: #f0faf6; }
+.declaration-list input { width: 17px; height: 17px; margin: 1px 0 0; accent-color: var(--success); }
+.declaration-guideline { margin-top: 16px; border: 1px solid #e1e4e6; border-radius: 10px; background: #fff; }
+.declaration-guideline summary { padding: 12px 14px; color: var(--upm-dark-red); font-size: 11px; font-weight: 850; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; }
+.declaration-guideline > p, .declaration-guideline > div { margin: 0; padding: 0 14px 13px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.declaration-guideline > div p { margin: 0; }
+.declaration-guideline > div p + p { margin-top: 7px; }
+.decision-summary { margin-top: 18px; padding: 13px 15px; border: 1px solid #eadcae; border-radius: 10px; background: #fffaf0; }
+.decision-summary p { margin: 0; color: #5f5438; font-size: 11px; line-height: 1.55; }
+.decision-summary p + p { margin-top: 4px; }
 
 .validation-app { min-height: 100vh; }
 .topbar {
@@ -274,6 +299,8 @@ footer { width: min(1540px, calc(100% - 32px)); margin: 14px auto 24px; display:
   .entry-card { padding: 25px 20px; }
   .entry-brand { align-items: flex-start; flex-direction: column; }
   .entry-facts { grid-template-columns: 1fr; }
+  .qualification-grid { grid-template-columns: 1fr; }
+  .qualification-grid label > span { min-height: 0; }
   .inline-field { grid-template-columns: 1fr; }
   .guideline-grid { grid-template-columns: 1fr; }
 }

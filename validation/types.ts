@@ -9,6 +9,19 @@ export type SmellKey =
 export type DecisionMap = Record<SmellKey, Decision | null>;
 export type DecisionTimeMap = Partial<Record<SmellKey, string>>;
 
+export type JavaScriptExperience = "less-than-1" | "1-2" | "3-5" | "6-10" | "10-plus";
+export type CodeReviewFrequency = "occasional" | "monthly" | "weekly" | "daily";
+export type CodeSmellFamiliarity = "introductory" | "working" | "advanced";
+
+export type ValidatorDeclaration = {
+  version: string;
+  acceptedAt: string;
+  javascriptExperience: JavaScriptExperience;
+  codeReviewFrequency: CodeReviewFrequency;
+  codeSmellFamiliarity: CodeSmellFamiliarity;
+  agreementIds: string[];
+};
+
 export type ValidationSample = {
   sampleId: string;
   datasetMethodId: string;
@@ -49,6 +62,7 @@ export type AnnotationRecord = {
   sampleId: string;
   datasetMethodId: string;
   datasetSha256: string;
+  declaration?: ValidatorDeclaration;
   revision: number;
   decisions: Record<SmellKey, Decision>;
   decisionTimes: Record<SmellKey, string>;

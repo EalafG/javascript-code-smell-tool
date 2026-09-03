@@ -1,5 +1,19 @@
 # Annotation Guideline — Version 1.0.0 (Pilot)
 
+## Before annotation
+
+Validators must complete participation declaration version `1.0.0` before
+viewing the annotation workspace. They confirm sufficient practical JavaScript
+experience, independent blinded review, confidential handling of source
+samples, correct use of the uncertainty option, and voluntary participation.
+JavaScript experience, code-review frequency, and code-smell familiarity are
+recorded as categorical methodological metadata rather than personal identity.
+
+Do not paste or upload study samples to external services or AI tools. The
+website declaration is an auditable operational control; it does not replace
+the participant information and informed-consent materials required by the
+applicable UPM ethics approval.
+
 ## Purpose and unit of annotation
 
 The purpose is to obtain independent expert judgments for four JavaScript code
@@ -13,9 +27,9 @@ automatically complex.
 
 ## Decision scale
 
-- **Present** — the evidence is sufficient to conclude that the smell is
+- **Present (clear)** — the evidence is sufficient to conclude that the smell is
   present in the displayed method.
-- **Absent** — the evidence is sufficient to conclude that the smell is not
+- **Absent (clear)** — the evidence is sufficient to conclude that the smell is not
   present.
 - **Uncertain / insufficient context** — a defensible judgment cannot be made
   because context is missing, syntax is unfamiliar/ambiguous, generated code

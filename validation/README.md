@@ -29,6 +29,22 @@ agreement. It is not the final validation sample. After the pilot, freeze the
 revised protocol and draw the main sample (recommended starting range:
 1,200–1,500 unique methods, subject to the pilot's precision analysis).
 
+## Validator eligibility and declaration
+
+Before viewing any sample, each validator completes declaration version
+`1.0.0`. The entry page records an anonymized validator ID, categorical
+JavaScript experience, code-review frequency, code-smell familiarity, the
+accepted declaration IDs, and an ISO timestamp. Validators must confirm that
+they can assess JavaScript method-level code, will work independently and
+blindly, will handle source samples confidentially, and will use `Uncertain`
+with a note when essential context is missing.
+
+This is an operational research declaration, not a substitute for the
+participant information sheet, informed-consent form, ethics approval, or
+withdrawal procedure required by the applicable UPM protocol. The final study
+protocol should state explicit inclusion/exclusion criteria and preserve the
+approved participant materials separately.
+
 ## Reproduce the pilot
 
 From the repository root:
@@ -72,9 +88,12 @@ pnpm dev
 
 When no backend variables are present, the site runs in **local pilot mode**.
 The validator first selects the private blinded JSON payload, then creates or
-accepts an anonymized validator ID. The file is read only in the browser,
-progress is stored on that device, and annotations can be exported as an
-append-only CSV. This mode is useful for testing and offline annotation.
+accepts an anonymized validator ID, supplies categorical experience metadata,
+and accepts the versioned participation declaration. The file is read only in
+the browser, progress is stored on that device, and annotations can be exported
+as an append-only CSV. Declaration version, acceptance time, and experience
+categories are repeated on each exported annotation row for auditability. This
+mode is useful for testing and offline annotation.
 
 For a multi-validator study, create a Supabase project, run
 `database/schema.sql`, import the frozen pilot rows, and set:

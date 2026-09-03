@@ -19,6 +19,25 @@ create table public.profiles (
   created_at timestamptz not null default now()
 );
 
+create table public.validator_declarations (
+  id uuid primary key default gen_random_uuid(),
+  validator_id uuid not null references public.profiles(id) on delete restrict,
+  declaration_version text not null,
+  javascript_experience text not null check (
+    javascript_experience in ('less-than-1', '1-2', '3-5', '6-10', '10-plus')
+  ),
+  code_review_frequency text not null check (
+    code_review_frequency in ('occasional', 'monthly', 'weekly', 'daily')
+  ),
+  code_smell_familiarity text not null check (
+    code_smell_familiarity in ('introductory', 'working', 'advanced')
+  ),
+  agreement_ids text[] not null,
+  client_accepted_at timestamptz not null,
+  accepted_at timestamptz not null default now(),
+  unique (validator_id, declaration_version)
+);
+
 create table public.datasets (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -126,6 +145,8 @@ create index assignments_validator_status_idx
   on public.assignments (validator_id, status, sequence_no);
 create index annotations_assignment_idx on public.annotations (assignment_id, revision desc);
 create index methods_dataset_idx on public.methods (dataset_id, sample_id);
+create index validator_declarations_validator_idx
+  on public.validator_declarations (validator_id, accepted_at desc);
 
 create or replace function public.is_study_admin()
 returns boolean
@@ -159,6 +180,7 @@ create trigger on_auth_user_created
   for each row execute procedure public.handle_new_auth_user();
 
 alter table public.profiles enable row level security;
+alter table public.validator_declarations enable row level security;
 alter table public.datasets enable row level security;
 alter table public.methods enable row level security;
 alter table public.detector_snapshots enable row level security;
@@ -171,6 +193,10 @@ create policy profiles_read_self_or_admin on public.profiles
   for select to authenticated
   using (id = auth.uid() or public.is_study_admin());
 
+create policy declarations_read_self_or_admin on public.validator_declarations
+  for select to authenticated
+  using (validator_id = auth.uid() or public.is_study_admin());
+
 create policy datasets_read_authenticated on public.datasets
   for select to authenticated using (true);
 
@@ -178,9 +204,15 @@ create policy methods_read_when_assigned on public.methods
   for select to authenticated
   using (
     public.is_study_admin()
-    or exists (
-      select 1 from public.assignments a
-      where a.method_id = methods.id and a.validator_id = auth.uid()
+    or (
+      exists (
+        select 1 from public.assignments a
+        where a.method_id = methods.id and a.validator_id = auth.uid()
+      )
+      and exists (
+        select 1 from public.validator_declarations vd
+        where vd.validator_id = auth.uid() and vd.declaration_version = '1.0.0'
+      )
     )
   );
 
@@ -232,7 +264,71 @@ select
 from public.assignments a
 join public.methods m on m.id = a.method_id
 join public.datasets d on d.id = m.dataset_id
-where a.validator_id = auth.uid();
+where a.validator_id = auth.uid()
+  and exists (
+    select 1 from public.validator_declarations vd
+    where vd.validator_id = auth.uid() and vd.declaration_version = '1.0.0'
+  );
+
+create or replace function public.accept_validator_declaration(
+  p_declaration_version text,
+  p_javascript_experience text,
+  p_code_review_frequency text,
+  p_code_smell_familiarity text,
+  p_agreement_ids text[],
+  p_client_accepted_at timestamptz
+)
+returns timestamptz
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_accepted_at timestamptz;
+  v_required_agreements constant text[] := array[
+    'javascript-competence',
+    'independent-blinded-review',
+    'confidential-handling',
+    'uncertainty-rule',
+    'voluntary-participation'
+  ];
+begin
+  if auth.uid() is null then
+    raise exception 'Authentication is required';
+  end if;
+  if p_declaration_version <> '1.0.0' then
+    raise exception 'The declaration version is not current';
+  end if;
+  if not coalesce(p_agreement_ids @> v_required_agreements, false) then
+    raise exception 'Every required declaration must be accepted';
+  end if;
+
+  insert into public.validator_declarations (
+    validator_id,
+    declaration_version,
+    javascript_experience,
+    code_review_frequency,
+    code_smell_familiarity,
+    agreement_ids,
+    client_accepted_at
+  ) values (
+    auth.uid(),
+    p_declaration_version,
+    p_javascript_experience,
+    p_code_review_frequency,
+    p_code_smell_familiarity,
+    p_agreement_ids,
+    p_client_accepted_at
+  )
+  on conflict (validator_id, declaration_version) do nothing;
+
+  select accepted_at into v_accepted_at
+  from public.validator_declarations
+  where validator_id = auth.uid() and declaration_version = p_declaration_version;
+
+  return v_accepted_at;
+end;
+$$;
 
 create or replace function public.open_assignment(p_assignment_id uuid)
 returns void
@@ -241,6 +337,14 @@ security definer
 set search_path = public
 as $$
 begin
+  if not exists (
+    select 1
+    from public.validator_declarations
+    where validator_id = auth.uid() and declaration_version = '1.0.0'
+  ) then
+    raise exception 'The current validator declaration is required before opening an assignment';
+  end if;
+
   update public.assignments
   set status = case when status = 'pending' then 'in_progress' else status end,
       opened_at = coalesce(opened_at, now())
@@ -283,6 +387,13 @@ begin
 
   if not found then
     raise exception 'Assignment is unavailable';
+  end if;
+  if not exists (
+    select 1
+    from public.validator_declarations
+    where validator_id = auth.uid() and declaration_version = '1.0.0'
+  ) then
+    raise exception 'The current validator declaration is required before annotation';
   end if;
   if (
     p_long_method = 'uncertain'
@@ -344,6 +455,14 @@ begin
 end;
 $$;
 
+revoke all on function public.accept_validator_declaration(
+  text,
+  text,
+  text,
+  text,
+  text[],
+  timestamptz
+) from public, anon;
 revoke all on function public.open_assignment(uuid) from public, anon;
 revoke all on function public.submit_annotation(
   uuid,
@@ -356,7 +475,15 @@ revoke all on function public.submit_annotation(
   timestamptz
 ) from public, anon;
 
-grant select on public.validator_queue to authenticated;
+grant select on public.validator_declarations, public.validator_queue to authenticated;
+grant execute on function public.accept_validator_declaration(
+  text,
+  text,
+  text,
+  text,
+  text[],
+  timestamptz
+) to authenticated;
 grant execute on function public.open_assignment(uuid) to authenticated;
 grant execute on function public.submit_annotation(
   uuid,
@@ -393,6 +520,12 @@ select
   m.dataset_method_id,
   m.project,
   m.file_path,
+  vd.declaration_version,
+  vd.accepted_at as declaration_accepted_at,
+  vd.client_accepted_at as declaration_client_accepted_at,
+  vd.javascript_experience,
+  vd.code_review_frequency,
+  vd.code_smell_familiarity,
   an.revision,
   an.phase,
   an.long_method,
@@ -407,6 +540,19 @@ select
 from public.annotations an
 join public.profiles p on p.id = an.validator_id
 join public.assignments a on a.id = an.assignment_id
-join public.methods m on m.id = a.method_id;
+join public.methods m on m.id = a.method_id
+left join lateral (
+  select
+    declaration_version,
+    accepted_at,
+    client_accepted_at,
+    javascript_experience,
+    code_review_frequency,
+    code_smell_familiarity
+  from public.validator_declarations
+  where validator_id = an.validator_id
+  order by accepted_at desc
+  limit 1
+) vd on true;
 
 grant select on public.admin_progress, public.annotation_export to authenticated;

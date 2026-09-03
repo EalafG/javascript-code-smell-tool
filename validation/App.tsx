@@ -6,12 +6,16 @@ import { CodeThemeToggle, SyntaxCode } from "../app/code-viewer";
 import { getSupabaseClient } from "./supabase";
 import type {
   AnnotationRecord,
+  CodeReviewFrequency,
+  CodeSmellFamiliarity,
   Decision,
   DecisionMap,
   DecisionTimeMap,
+  JavaScriptExperience,
   PilotPayload,
   SmellKey,
   ValidationSample,
+  ValidatorDeclaration,
 } from "./types";
 
 const EMPTY_DECISIONS: DecisionMap = {
@@ -49,12 +53,57 @@ const SMELLS: Array<{
 ];
 
 const DECISIONS: Array<{ value: Decision; label: string }> = [
-  { value: "present", label: "Present" },
-  { value: "absent", label: "Absent" },
-  { value: "uncertain", label: "Uncertain" },
+  { value: "present", label: "Present (clear)" },
+  { value: "absent", label: "Absent (clear)" },
+  { value: "uncertain", label: "Uncertain / borderline" },
 ];
 
 const LOCAL_VALIDATOR_KEY = "upm-validation:validator-id";
+const DECLARATION_VERSION = "1.0.0";
+
+const DECLARATION_AGREEMENTS = [
+  {
+    id: "javascript-competence",
+    text: "I have sufficient practical JavaScript experience to assess functions, methods, callbacks, closures, classes, and object access.",
+  },
+  {
+    id: "independent-blinded-review",
+    text: "I will review each method independently using only the displayed source and study guideline, without seeking detector labels or metrics.",
+  },
+  {
+    id: "confidential-handling",
+    text: "I will keep the supplied code samples confidential and will not paste, upload, or share them through external services or AI tools.",
+  },
+  {
+    id: "uncertainty-rule",
+    text: "I will select Uncertain and provide a short reason when the evidence is balanced or essential context is missing.",
+  },
+  {
+    id: "voluntary-participation",
+    text: "I understand the study purpose and voluntarily agree to take part under these conditions.",
+  },
+] as const;
+
+const JAVASCRIPT_EXPERIENCE_OPTIONS: Array<{ value: JavaScriptExperience; label: string }> = [
+  { value: "less-than-1", label: "Less than 1 year" },
+  { value: "1-2", label: "1–2 years" },
+  { value: "3-5", label: "3–5 years" },
+  { value: "6-10", label: "6–10 years" },
+  { value: "10-plus", label: "More than 10 years" },
+];
+
+const CODE_REVIEW_OPTIONS: Array<{ value: CodeReviewFrequency; label: string }> = [
+  { value: "occasional", label: "Occasionally" },
+  { value: "monthly", label: "Monthly" },
+  { value: "weekly", label: "Weekly" },
+  { value: "daily", label: "Daily or almost daily" },
+];
+
+const CODE_SMELL_OPTIONS: Array<{ value: CodeSmellFamiliarity; label: string }> = [
+  { value: "introductory", label: "Introductory familiarity" },
+  { value: "working", label: "Working knowledge" },
+  { value: "advanced", label: "Advanced knowledge" },
+];
 
 function asset(fileName: string) {
   return new URL(`../${fileName}`, window.location.href).toString();
@@ -72,6 +121,11 @@ function exportAnnotations(records: AnnotationRecord[]) {
     "SAMPLE_ID",
     "DATASET_METHOD_ID",
     "DATASET_SHA256",
+    "DECLARATION_VERSION",
+    "DECLARATION_ACCEPTED_AT",
+    "JAVASCRIPT_EXPERIENCE",
+    "CODE_REVIEW_FREQUENCY",
+    "CODE_SMELL_FAMILIARITY",
     "REVISION",
     "LONG_METHOD",
     "COMPLEX_METHOD",
@@ -93,6 +147,11 @@ function exportAnnotations(records: AnnotationRecord[]) {
     record.sampleId,
     record.datasetMethodId,
     record.datasetSha256,
+    record.declaration?.version ?? "",
+    record.declaration?.acceptedAt ?? "",
+    record.declaration?.javascriptExperience ?? "",
+    record.declaration?.codeReviewFrequency ?? "",
+    record.declaration?.codeSmellFamiliarity ?? "",
     record.revision,
     record.decisions.longMethod,
     record.decisions.complexMethod,
@@ -124,6 +183,10 @@ function localRecordsKey(validatorId: string, datasetSha256: string) {
   return `upm-validation:annotations:${datasetSha256}:${validatorId}`;
 }
 
+function localDeclarationKey(validatorId: string, datasetSha256: string) {
+  return `upm-validation:declaration:${datasetSha256}:${validatorId}:${DECLARATION_VERSION}`;
+}
+
 function readLocalRecords(validatorId: string, datasetSha256: string): AnnotationRecord[] {
   try {
     const value = localStorage.getItem(localRecordsKey(validatorId, datasetSha256));
@@ -135,6 +198,14 @@ function readLocalRecords(validatorId: string, datasetSha256: string): Annotatio
 
 function writeLocalRecords(validatorId: string, datasetSha256: string, records: AnnotationRecord[]) {
   localStorage.setItem(localRecordsKey(validatorId, datasetSha256), JSON.stringify(records));
+}
+
+function writeLocalDeclaration(
+  validatorId: string,
+  datasetSha256: string,
+  declaration: ValidatorDeclaration,
+) {
+  localStorage.setItem(localDeclarationKey(validatorId, datasetSha256), JSON.stringify(declaration));
 }
 
 function normalizeHostedSample(row: Record<string, unknown>): ValidationSample {
@@ -303,65 +374,187 @@ function LocalDatasetEntry({ onLoad }: { onLoad: (payload: PilotPayload) => void
   );
 }
 
-function LocalEntry({
-  study,
-  onBegin,
+function ValidatorDeclarationEntry({
+  studyTitle,
+  sampleCount,
+  mode,
+  assignedValidatorId,
+  onAccept,
 }: {
-  study: PilotPayload["study"];
-  onBegin: (validatorId: string) => void;
+  studyTitle: string;
+  sampleCount?: number;
+  mode: "local" | "hosted";
+  assignedValidatorId?: string;
+  onAccept: (validatorId: string, declaration: ValidatorDeclaration) => Promise<void> | void;
 }) {
-  const [validatorId, setValidatorId] = useState(() => localStorage.getItem(LOCAL_VALIDATOR_KEY) ?? "");
+  const [validatorId, setValidatorId] = useState(
+    () => assignedValidatorId ?? localStorage.getItem(LOCAL_VALIDATOR_KEY) ?? "",
+  );
+  const [javascriptExperience, setJavaScriptExperience] = useState<JavaScriptExperience | "">("");
+  const [codeReviewFrequency, setCodeReviewFrequency] = useState<CodeReviewFrequency | "">("");
+  const [codeSmellFamiliarity, setCodeSmellFamiliarity] = useState<CodeSmellFamiliarity | "">("");
+  const [agreements, setAgreements] = useState<Record<string, boolean>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const allAgreed = DECLARATION_AGREEMENTS.every((agreement) => agreements[agreement.id]);
+  const canContinue = Boolean(
+    validatorId.trim() && javascriptExperience && codeReviewFrequency && codeSmellFamiliarity && allAgreed,
+  );
 
   function generateId() {
     setValidatorId(`VAL-${crypto.randomUUID().slice(0, 8).toUpperCase()}`);
   }
 
-  function begin(event: FormEvent) {
+  async function begin(event: FormEvent) {
     event.preventDefault();
     const value = validatorId.trim();
-    if (!value) return;
-    localStorage.setItem(LOCAL_VALIDATOR_KEY, value);
-    onBegin(value);
+    if (!canContinue || !javascriptExperience || !codeReviewFrequency || !codeSmellFamiliarity) return;
+    const declaration: ValidatorDeclaration = {
+      version: DECLARATION_VERSION,
+      acceptedAt: new Date().toISOString(),
+      javascriptExperience,
+      codeReviewFrequency,
+      codeSmellFamiliarity,
+      agreementIds: DECLARATION_AGREEMENTS.map((agreement) => agreement.id),
+    };
+    setSubmitting(true);
+    setError("");
+    try {
+      if (mode === "local") localStorage.setItem(LOCAL_VALIDATOR_KEY, value);
+      await onAccept(value, declaration);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The declaration could not be recorded.");
+      setSubmitting(false);
+    }
   }
 
   return (
     <main className="entry-shell">
-      <section className="entry-card entry-card--wide">
+      <section className="entry-card entry-card--declaration">
         <div className="entry-brand">
           <img src={asset("upm-logo.jpg")} alt="Universiti Putra Malaysia" />
-          <span>Local pilot · blinded</span>
+          <span>{mode === "hosted" ? "Hosted study" : "Local pilot"} · blinded</span>
         </div>
-        <p className="kicker">MANUAL DATASET VALIDATION</p>
-        <h1>{study.title}</h1>
+        <p className="kicker">PARTICIPATION DECLARATION · VERSION {DECLARATION_VERSION}</p>
+        <h1>Confirm eligibility and study conditions</h1>
         <p>
-          Independently judge four smells for {study.pilotSize} method-level samples. Metrics,
-          detector labels, and sampling strata are not shown.
+          {studyTitle}. You will independently judge four JavaScript code smells at method level.
+          Detector labels, metrics, and sampling strata remain hidden.
         </p>
         <div className="entry-facts" aria-label="Pilot facts">
-          <div><strong>{study.pilotSize}</strong><span>methods</span></div>
+          {sampleCount === undefined
+            ? <div><strong>Blinded</strong><span>private queue</span></div>
+            : <div><strong>{sampleCount}</strong><span>assigned methods</span></div>}
           <div><strong>4</strong><span>smells per method</span></div>
           <div><strong>3</strong><span>decision choices</span></div>
         </div>
         <form onSubmit={begin}>
-          <label htmlFor="validator-id">Anonymized validator ID</label>
-          <div className="inline-field">
-            <input
-              id="validator-id"
-              required
-              minLength={3}
-              maxLength={64}
-              value={validatorId}
-              onChange={(event) => setValidatorId(event.target.value)}
-              placeholder="VAL-XXXXXXXX"
-            />
-            <button className="button button--secondary" type="button" onClick={generateId}>Generate ID</button>
+          {assignedValidatorId ? (
+            <div className="validator-lock" aria-label="Assigned validator ID">
+              <span>Anonymized validator ID</span>
+              <strong>{assignedValidatorId}</strong>
+            </div>
+          ) : (
+            <>
+              <label htmlFor="validator-id">Anonymized validator ID</label>
+              <div className="inline-field">
+                <input
+                  id="validator-id"
+                  required
+                  minLength={3}
+                  maxLength={64}
+                  value={validatorId}
+                  onChange={(event) => setValidatorId(event.target.value)}
+                  placeholder="VAL-XXXXXXXX"
+                />
+                <button className="button button--secondary" type="button" onClick={generateId}>Generate ID</button>
+              </div>
+              <p className="field-help">Use the same ID on every session. Do not enter your name or email.</p>
+            </>
+          )}
+
+          <fieldset className="qualification-fields">
+            <legend>Experience profile</legend>
+            <div className="qualification-grid">
+              <label>
+                <span>JavaScript experience</span>
+                <select
+                  required
+                  value={javascriptExperience}
+                  onChange={(event) => setJavaScriptExperience(event.target.value as JavaScriptExperience)}
+                >
+                  <option value="">Select one</option>
+                  {JAVASCRIPT_EXPERIENCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Code-review frequency</span>
+                <select
+                  required
+                  value={codeReviewFrequency}
+                  onChange={(event) => setCodeReviewFrequency(event.target.value as CodeReviewFrequency)}
+                >
+                  <option value="">Select one</option>
+                  {CODE_REVIEW_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Code-smell familiarity</span>
+                <select
+                  required
+                  value={codeSmellFamiliarity}
+                  onChange={(event) => setCodeSmellFamiliarity(event.target.value as CodeSmellFamiliarity)}
+                >
+                  <option value="">Select one</option>
+                  {CODE_SMELL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="declaration-list">
+            <legend>Required declarations</legend>
+            {DECLARATION_AGREEMENTS.map((agreement) => (
+              <label key={agreement.id}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(agreements[agreement.id])}
+                  onChange={(event) => setAgreements((current) => ({
+                    ...current,
+                    [agreement.id]: event.target.checked,
+                  }))}
+                />
+                <span>{agreement.text}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          <details className="declaration-guideline">
+            <summary>Review the annotation guideline</summary>
+            <p>Judge only the displayed method. Nested functions are separate units and must not influence the parent judgment.</p>
+            <div>
+              {SMELLS.map((smell) => (
+                <p key={smell.key}><strong>{smell.label}:</strong> {smell.cue}</p>
+              ))}
+            </div>
+          </details>
+
+          <div className="decision-summary">
+            <p><strong>Present</strong> and <strong>Absent</strong> mean the evidence is sufficiently clear.</p>
+            <p><strong>Uncertain</strong> covers borderline cases or missing essential context and requires a note.</p>
           </div>
-          <p className="field-help">Use the same ID on every session. Do not enter your name or email.</p>
-          <button className="button button--primary" type="submit">Begin or resume pilot</button>
+
+          {error && <p className="entry-message" role="alert">{error}</p>}
+          <button className="button button--primary" type="submit" disabled={!canContinue || submitting}>
+            {submitting ? "Recording declaration…" : "Agree and begin validation"}
+          </button>
         </form>
         <div className="privacy-callout">
-          Local mode stores the append-only annotation log in this browser. Export the CSV before
-          changing devices or clearing browser data.
+          The declaration version, acceptance time, experience categories, and accepted statements
+          are logged with your anonymized validator ID. This operational record supports study
+          auditing but does not replace any participant information sheet or informed-consent
+          process required by UPM ethics approval.
         </div>
         <a className="quiet-link" href="../">Return to the detector</a>
       </section>
@@ -610,7 +803,7 @@ function Workspace({
             <div><p className="kicker">YOUR JUDGMENT</p><h2>Four independent decisions</h2></div>
             <span>{SMELLS.filter(({ key }) => decisions[key]).length}/4</span>
           </div>
-          <p className="annotation-intro">Select one decision for each smell. Use Uncertain only when a defensible judgment needs missing context.</p>
+          <p className="annotation-intro">Select a clear Present or Absent decision for each smell. Use Uncertain / borderline when a defensible judgment needs missing context.</p>
           <div className="smell-list">
             {SMELLS.map((smell, index) => (
               <fieldset className="smell-decision" key={smell.key}>
@@ -668,8 +861,8 @@ function Workspace({
               {SMELLS.map((smell) => <article key={smell.key}><h3>{smell.label}</h3><p>{smell.cue}</p></article>)}
             </div>
             <div className="decision-guide">
-              <p><strong>Present</strong> — sufficient evidence that the smell exists.</p>
-              <p><strong>Absent</strong> — sufficient evidence that it does not.</p>
+              <p><strong>Present (clear)</strong> — sufficient evidence that the smell exists.</p>
+              <p><strong>Absent (clear)</strong> — sufficient evidence that it does not.</p>
               <p><strong>Uncertain</strong> — essential context is missing or the evidence is genuinely balanced; explain why.</p>
             </div>
             <p className="dialog-note">Nested functions are separate units. Do not count their control flow or foreign accesses as part of the displayed parent.</p>
@@ -685,20 +878,40 @@ function HostedApp({ client }: { client: SupabaseClient }) {
   const [loading, setLoading] = useState(true);
   const [samples, setSamples] = useState<ValidationSample[]>([]);
   const [validatorCode, setValidatorCode] = useState("");
+  const [declarationAccepted, setDeclarationAccepted] = useState(false);
   const [loadError, setLoadError] = useState("");
 
   const loadQueue = useCallback(async (activeSession: Session) => {
     setLoading(true);
-    const [queueResult, profileResult] = await Promise.all([
-      client.from("validator_queue").select("*").order("sequence_no"),
+    const [profileResult, declarationResult] = await Promise.all([
       client.from("profiles").select("validator_code").eq("id", activeSession.user.id).maybeSingle(),
+      client
+        .from("validator_declarations")
+        .select("declaration_version")
+        .eq("validator_id", activeSession.user.id)
+        .eq("declaration_version", DECLARATION_VERSION)
+        .maybeSingle(),
     ]);
-    if (queueResult.error) {
-      setLoadError(queueResult.error.message);
+    const firstError = profileResult.error ?? declarationResult.error;
+    if (firstError) {
+      setLoadError(firstError.message);
       setSamples([]);
     } else {
-      setSamples((queueResult.data ?? []).map((row) => normalizeHostedSample(row as Record<string, unknown>)));
-      setLoadError("");
+      const accepted = declarationResult.data?.declaration_version === DECLARATION_VERSION;
+      setDeclarationAccepted(accepted);
+      if (accepted) {
+        const queueResult = await client.from("validator_queue").select("*").order("sequence_no");
+        if (queueResult.error) {
+          setLoadError(queueResult.error.message);
+          setSamples([]);
+        } else {
+          setSamples((queueResult.data ?? []).map((row) => normalizeHostedSample(row as Record<string, unknown>)));
+          setLoadError("");
+        }
+      } else {
+        setSamples([]);
+        setLoadError("");
+      }
     }
     setValidatorCode(String(profileResult.data?.validator_code ?? activeSession.user.id.slice(0, 8)));
     setLoading(false);
@@ -715,15 +928,38 @@ function HostedApp({ client }: { client: SupabaseClient }) {
       if (nextSession) loadQueue(nextSession);
       else {
         setSamples([]);
+        setDeclarationAccepted(false);
         setLoading(false);
       }
     });
     return () => data.subscription.unsubscribe();
   }, [client, loadQueue]);
 
+  async function acceptDeclaration(_validatorId: string, declaration: ValidatorDeclaration) {
+    const { error } = await client.rpc("accept_validator_declaration", {
+      p_declaration_version: declaration.version,
+      p_javascript_experience: declaration.javascriptExperience,
+      p_code_review_frequency: declaration.codeReviewFrequency,
+      p_code_smell_familiarity: declaration.codeSmellFamiliarity,
+      p_agreement_ids: declaration.agreementIds,
+      p_client_accepted_at: declaration.acceptedAt,
+    });
+    if (error) throw error;
+    if (!session) throw new Error("Your session has expired. Please sign in again.");
+    await loadQueue(session);
+  }
+
   if (loading) return <main className="entry-shell"><section className="entry-card"><p className="kicker">LOADING</p><h1>Preparing your blinded queue…</h1></section></main>;
   if (!session) return <LoginPanel client={client} />;
   if (loadError) return <main className="entry-shell"><section className="entry-card"><p className="kicker">CONNECTION ERROR</p><h1>Your queue could not be loaded</h1><p>{loadError}</p><button className="button button--secondary" type="button" onClick={() => loadQueue(session)}>Try again</button></section></main>;
+  if (!declarationAccepted) return (
+    <ValidatorDeclarationEntry
+      studyTitle="UPM JavaScript Code Smell Expert Validation"
+      mode="hosted"
+      assignedValidatorId={validatorCode}
+      onAccept={acceptDeclaration}
+    />
+  );
 
   const completedIds = new Set(samples.filter((sample) => sample.status === "completed").map((sample) => sample.sampleId));
   const datasetSha256 = samples[0]?.datasetSha256 ?? "hosted-study";
@@ -766,17 +1002,28 @@ function HostedApp({ client }: { client: SupabaseClient }) {
 function LocalApp() {
   const [payload, setPayload] = useState<PilotPayload | null>(null);
   const [validatorId, setValidatorId] = useState("");
+  const [declaration, setDeclaration] = useState<ValidatorDeclaration | null>(null);
   const [records, setRecords] = useState<AnnotationRecord[]>([]);
 
-  function begin(value: string) {
+  function begin(value: string, acceptedDeclaration: ValidatorDeclaration) {
     if (!payload) return;
+    writeLocalDeclaration(value, payload.study.datasetSha256, acceptedDeclaration);
     setValidatorId(value);
+    setDeclaration(acceptedDeclaration);
     setRecords(readLocalRecords(value, payload.study.datasetSha256));
   }
 
   if (!payload) return <LocalDatasetEntry onLoad={setPayload} />;
   const activePayload = payload;
-  if (!validatorId) return <LocalEntry study={activePayload.study} onBegin={begin} />;
+  if (!validatorId || !declaration) return (
+    <ValidatorDeclarationEntry
+      studyTitle={activePayload.study.title}
+      sampleCount={activePayload.study.pilotSize}
+      mode="local"
+      onAccept={begin}
+    />
+  );
+  const activeDeclaration = declaration;
 
   const latestBySample = new Map<string, AnnotationRecord>();
   for (const record of records) {
@@ -799,6 +1046,7 @@ function LocalApp() {
       sampleId: sample.sampleId,
       datasetMethodId: sample.datasetMethodId,
       datasetSha256: activePayload.study.datasetSha256,
+      declaration: activeDeclaration,
       revision,
       decisions: draft.decisions,
       decisionTimes: draft.decisionTimes,
@@ -823,7 +1071,10 @@ function LocalApp() {
       datasetSha256={activePayload.study.datasetSha256}
       onSubmit={submit}
       onExport={() => exportAnnotations(records)}
-      onExit={() => setValidatorId("")}
+      onExit={() => {
+        setValidatorId("");
+        setDeclaration(null);
+      }}
     />
   );
 }
