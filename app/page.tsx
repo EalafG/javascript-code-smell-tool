@@ -19,6 +19,7 @@ import {
 import { downloadCsv, downloadParseFailuresCsv } from "./csv";
 import { useCodeThemePreference } from "./code-theme";
 import { CodeThemeToggle, SyntaxCode } from "./code-viewer";
+import { ValidationSampleBuilder } from "./ValidationSampleBuilder";
 
 type ParserApi = {
   parse: (source: string, options: Record<string, unknown>) => never;
@@ -156,6 +157,7 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [showAdvancedMetrics, setShowAdvancedMetrics] = useState(false);
+  const [showSampleBuilder, setShowSampleBuilder] = useState(false);
   const [codeTheme, setCodeTheme] = useCodeThemePreference();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -675,6 +677,7 @@ export default function Home() {
               <p>{filteredResults.length.toLocaleString()} of {results.length.toLocaleString()} method-level rows shown</p>
             </div>
             <div className="export-actions">
+              <button className="secondary-button" type="button" disabled={!results.length} onClick={() => setShowSampleBuilder(true)}>Create validation sample</button>
               {parseFailures.length > 0 && (
                 <button className="secondary-button" type="button" onClick={() => downloadParseFailuresCsv(
                   projectName.trim() || "javascript-project",
@@ -908,6 +911,13 @@ export default function Home() {
           <span>Acorn 8 · Method-level static analysis · Deterministic CSV schema</span>
         </footer>
       </div>
+      {showSampleBuilder && (
+        <ValidationSampleBuilder
+          results={results}
+          context={exportContext}
+          onClose={() => setShowSampleBuilder(false)}
+        />
+      )}
     </main>
   );
 }

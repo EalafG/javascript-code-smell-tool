@@ -9,7 +9,7 @@
     "dev": "vite",
     "build": "vite build",
     "start": "vite preview",
-    "test": "node --experimental-strip-types --test tests/analyzer.test.ts",
+    "test": "node --experimental-strip-types --test tests/analyzer.test.ts tests/validation-sampling.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },

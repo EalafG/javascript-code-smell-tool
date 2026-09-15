@@ -4,6 +4,28 @@ This directory contains the blinded manual-validation phase for the JavaScript
 code-smell dataset. It is separate from the detector so that expert judgments
 are not influenced by detector metrics or labels.
 
+## Create a sample in the detector
+
+The preferred workflow is now available directly in the detector. Analyze the
+source population, select **Create validation sample**, choose a research
+design preset, review its coverage and eligibility rules, and download the ZIP.
+Generation remains browser-local; source code and detector results are not
+uploaded to a sampling service.
+
+The Pilot calibration preset enriches positive, clean boundary, and
+multi-smell cases. Representative preserves the eligible population's natural
+predicted-label distribution and uses project-proportional allocation. Detector
+audit uses a controlled predicted-smelly/clean target for error analysis. A
+custom class target changes the sampling design and must not be used to claim
+population prevalence without an appropriate weighting analysis.
+
+The ZIP contains separate blinded validator JSON files plus restricted private
+manifests with labels, metrics, exclusions, assignments, hashes, versions,
+thresholds, and the deterministic seed. Distribute only the matching
+`validator-payloads/VAL-xx.json` file to each validator. See
+[browser-sampling-plan.md](protocol/browser-sampling-plan.md) for the current
+configurable protocol.
+
 ## Pilot design
 
 - **Pilot size:** 120 unique methods/functions.
@@ -45,7 +67,7 @@ withdrawal procedure required by the applicable UPM protocol. The final study
 protocol should state explicit inclusion/exclusion criteria and preserve the
 approved participant materials separately.
 
-## Reproduce the pilot
+## Reproduce the legacy fixed pilot from CSV and source files
 
 From the repository root:
 
@@ -76,7 +98,9 @@ authorized validators through an approved secure channel; never commit them
 to the public website repository.
 
 The same dataset, source tree, seed, and repository commit produce the same
-selection and sample order.
+selection and sample order. This command-line workflow remains available for
+the original fixed 120-method pilot; it is distinct from the configurable
+browser builder.
 
 ## Run the validation website
 
@@ -123,4 +147,6 @@ Pages `/validation/` URL.
    explicit outcome rather than silently converting it to clean or smelly.
 
 See [annotation-guidelines.md](protocol/annotation-guidelines.md) and
-[sampling-plan.md](protocol/sampling-plan.md) for the operational protocol.
+[sampling-plan.md](protocol/sampling-plan.md) for the original fixed pilot, and
+[browser-sampling-plan.md](protocol/browser-sampling-plan.md) for the integrated
+configurable sampler.

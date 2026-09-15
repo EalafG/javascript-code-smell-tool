@@ -36,6 +36,19 @@ The production build uses relative asset URLs so the local Acorn parser and UPM 
 
 The interface accepts individual `.js`, `.mjs`, `.cjs`, and `.jsx` files, a complete folder with preserved relative paths, or a pasted JavaScript snippet. Folder rules can skip `node_modules`, `dist`, `build`, and `coverage`. Optional category rules can exclude tests/specs, fixtures, vendor code, benchmarks, and maintenance scripts. Every included method is assigned a reproducible `CODE_CATEGORY` value.
 
+## Validation sample builder
+
+After an analysis, select **Create validation sample** in the results toolbar. The browser wizard can draw a pilot, representative, or detector-audit sample without uploading source code to a server. It supports a deterministic seed, natural or controlled predicted-class distribution, proportional or equal project allocation, project limits, per-smell coverage minima, multi-smell and near-threshold coverage, source-category exclusions, exact-source deduplication, and balanced assignment to multiple validators.
+
+The download is one ZIP with intentionally separated outputs:
+
+- `validator-payloads/VAL-xx.json` contains only the blinded source records assigned to one validator.
+- `validation-sample.blinded.json` is the complete blinded sample for local testing.
+- `private/sampling-manifest.csv` contains detector labels, metrics, strata, conditional selection probabilities, hashes, and the mapping from blinded IDs to dataset IDs.
+- `private/assignment-manifest.csv`, `private/exclusion-manifest.csv`, and `private/sampling-report.json` preserve assignment, exclusion, configuration, threshold, version, and population evidence.
+
+Only give a validator their matching file. Keep the complete package—especially `private/`—in restricted research storage and never commit a generated study package to the public repository. A controlled smelly/clean target is suitable for calibration or detector auditing, but its raw proportions must not be interpreted as prevalence. Use the Representative preset with natural distribution when population composition is the research target. See [the browser sampling protocol](validation/protocol/browser-sampling-plan.md).
+
 ## Method-level metrics
 
 Every function declaration, function expression, arrow function, object method, and ES6 class method becomes one deterministic dataset row. Nested functions are independent rows and are excluded from their parent's AST-traversal metrics. Their substantive declaration source remains part of the parent's physical/code line counts because it is textually inside the parent segment.

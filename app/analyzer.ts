@@ -71,6 +71,8 @@ export type MethodResult = {
   functionType: string;
   startLine: number;
   endLine: number;
+  contextStartLine: number;
+  contextEndLine: number;
   startOffset: number;
   endOffset: number;
   loc: number;
@@ -114,6 +116,7 @@ export type MethodResult = {
   smellCount: number;
   smellTypes: string[];
   source: string;
+  sourceContext: string;
 };
 
 export type AstNode = {
@@ -561,6 +564,7 @@ export function analyzeParsedSource(
 ): MethodResult[] {
   const { ast, comments, source, descriptor } = parsed;
   const sourceLineKinds = classifySourceLines(source, comments);
+  const sourceLines = source.split(/\r\n|\n|\r/);
   return collectFunctions(ast, source).map((candidate) => {
     const metrics = calculateMetrics(
       candidate.functionNode,
@@ -570,6 +574,8 @@ export function analyzeParsedSource(
       descriptor.relativePath,
       featureEnvyModel,
     );
+    const contextStartLine = Math.max(1, metrics.startLine - 2);
+    const contextEndLine = Math.min(sourceLines.length, metrics.endLine + 2);
     const unclassified: MethodResult = {
       id: "",
       project: descriptor.project,
@@ -579,6 +585,9 @@ export function analyzeParsedSource(
       functionName: candidate.functionName,
       functionType: candidate.functionType,
       ...metrics,
+      contextStartLine,
+      contextEndLine,
+      sourceContext: sourceLines.slice(contextStartLine - 1, contextEndLine).join("\n"),
       isLongMethod: false,
       isComplexMethod: false,
       isComplexConditional: false,
