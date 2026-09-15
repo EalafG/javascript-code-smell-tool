@@ -7,9 +7,16 @@ import jsx from "acorn-jsx";
 import {
   classifySourceCategory,
   analyzeProjectSources,
+  analyzeParsedSource,
   analyzeSource,
   assignDeterministicIds,
+  createProjectAnalysisModel,
   deduplicateMethodResults,
+  disposeProjectAnalysisModel,
+  finalizeProjectAnalysisModel,
+  finalizeMethodResultsInPlace,
+  indexParsedSource,
+  parseJavaScriptSource,
 } from "../app/analyzer.ts";
 import type { MethodResult, Thresholds } from "../app/analyzer.ts";
 import { CSV_HEADERS, PARSE_FAILURE_HEADERS, toCsv, toParseFailuresCsv } from "../app/csv.ts";
@@ -361,6 +368,39 @@ test("sorts files into one deterministic project-wide inference model", () => {
   assert.equal(last.feIndexedFileCount, 201);
 });
 
+test("two-pass low-memory analysis preserves metrics and releases project inference state", () => {
+  const entries = [{
+    source: "const user = { name: 'A' }; function read(value) { return value.name; } read(user);",
+    descriptor: { project: "alpha", fileName: "a.js", relativePath: "alpha/src/a.js" },
+  }, {
+    source: "function local() { return this.value; }",
+    descriptor: { project: "alpha", fileName: "b.js", relativePath: "alpha/src/b.js" },
+  }];
+  const expected = analyzeProjectSources(parser, entries, thresholds);
+  const model = createProjectAnalysisModel("P-0001");
+  for (const entry of entries) indexParsedSource(model, parseJavaScriptSource(parser, entry.source, entry.descriptor));
+  finalizeProjectAnalysisModel(model);
+  const actual = entries.flatMap((entry) => analyzeParsedSource(
+    parseJavaScriptSource(parser, entry.source, entry.descriptor),
+    thresholds,
+    model,
+  ));
+  const metrics = (result: MethodResult) => ({
+    file: result.relativePath,
+    name: result.functionName,
+    cyclo: result.cyclo,
+    atfd: result.atfd,
+    laa: result.laa,
+    fdp: result.fdp,
+    providers: result.foreignProviders,
+  });
+  assert.deepEqual(actual.map(metrics), expected.map(metrics));
+  disposeProjectAnalysisModel(model);
+  assert.equal(model.indexedSources.size, 0);
+  assert.equal(model.constraints.length, 0);
+  assert.equal(model.sourceScopes.size, 0);
+});
+
 test("uses exact local-access counts at the one-third Feature Envy boundary", () => {
   const [result] = analyze(`function boundary(customer) {
   void this.first;
@@ -467,6 +507,17 @@ test("deduplicates exact rows without collapsing distinct same-line methods", ()
   assert.notEqual(results[0].startOffset, results[1].startOffset);
 });
 
+test("low-memory finalization matches deterministic deduplication and ID assignment", () => {
+  const analyzed = analyze("const first = () => 1; const second = () => 2;", "src/order.js");
+  const withDuplicate = [analyzed[1], analyzed[0], analyzed[0]];
+  const expected = assignDeterministicIds(deduplicateMethodResults(withDuplicate));
+  const actual = finalizeMethodResultsInPlace([...withDuplicate]);
+  assert.deepEqual(
+    actual.map(({ id, functionName, startOffset, endOffset }) => ({ id, functionName, startOffset, endOffset })),
+    expected.map(({ id, functionName, startOffset, endOffset }) => ({ id, functionName, startOffset, endOffset })),
+  );
+});
+
 test("exports the stable research schema and escapes CSV values", () => {
   const [base] = assignDeterministicIds(analyze("function clean() {}", "src/a,b.js"));
   const result: MethodResult = {
@@ -505,6 +556,7 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.ok(CSV_HEADERS.includes("CSV_SCHEMA_VERSION"));
   assert.ok(CSV_HEADERS.includes("DETECTOR_VERSION"));
   assert.ok(CSV_HEADERS.includes("PARSER_VERSION"));
+  assert.ok(CSV_HEADERS.includes("PROJECT_GROUPING"));
   assert.ok(CSV_HEADERS.includes("LONG_LOC_THRESHOLD"));
   assert.ok(CSV_HEADERS.includes("CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED"));
   assert.ok(CSV_HEADERS.includes("is_complex_conditional_sonar"));
@@ -519,6 +571,7 @@ test("exports parse failures as a stable escaped CSV", () => {
   }], "Acorn 8.15.0");
   const lines = csv.trimEnd().split("\r\n");
   assert.equal(lines[0], PARSE_FAILURE_HEADERS.join(","));
+  assert.ok(PARSE_FAILURE_HEADERS.includes("PROJECT_GROUPING"));
   assert.match(lines[1], /"src\/a,b\.js"/);
   assert.match(lines[1], /"Unexpected ""token"""/);
 });

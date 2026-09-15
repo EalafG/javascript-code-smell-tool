@@ -162,6 +162,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mon
 }
 .section-kicker { color: var(--upm-red); }
 .compact-heading { margin: 34px 2px 15px; }
+.analysis-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
 .primary-button, .secondary-button {
   min-height: 43px;
   border-radius: 10px;
@@ -318,6 +319,12 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mon
   font: 11px ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 .ignore-options input, .switch-row input { accent-color: var(--upm-red); }
+.project-mode-options small { color: var(--upm-gray); font-size: 10px; line-height: 1.45; }
+.analysis-progress { margin-top: 18px; padding: 11px 13px; border: 1px solid #e2e5e7; border-radius: 10px; background: #fafbfb; }
+.analysis-progress > div:first-child { margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 18px; color: var(--upm-gray); font-size: 10px; }
+.analysis-progress > div:first-child span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.analysis-progress > div:first-child strong { flex: 0 0 auto; color: var(--upm-dark); font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.analysis-progress .progress-track { margin-top: 0; }
 .progress-track { height: 5px; margin-top: 20px; overflow: hidden; border-radius: 99px; background: #eceeef; }
 .progress-track span { height: 100%; display: block; border-radius: inherit; background: var(--upm-red); transition: width .15s; }
 .inline-message { margin: 15px 0 0; padding: 10px 12px; border-left: 3px solid var(--upm-red); color: var(--upm-dark-red); background: #fff3f5; font-size: 12px; }
@@ -752,7 +759,8 @@ body:has(.sample-builder-backdrop) { overflow: hidden; }
   .hero__tools { grid-column: 1; justify-items: start; }
   .parser-status { grid-column: 1; margin: 0; }
   .section-heading, .results-toolbar, .project-row { display: block; }
-  .section-heading > .primary-button { width: 100%; margin-top: 18px; }
+  .analysis-actions { margin-top: 18px; justify-content: stretch; }
+  .analysis-actions button { flex: 1; }
   .privacy-note { margin-top: 12px; }
   .rule-grid, .summary-grid { grid-template-columns: 1fr 1fr; }
   .results-toolbar .export-actions { margin-top: 18px; }

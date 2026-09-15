@@ -45,7 +45,7 @@ creating a new protocol version and sample.
 ## Method eligibility
 
 Eligible methods must belong to an included file and have an available source
-segment. Because CSV schema 2.2.0 does not contain start/end columns or byte
+segment. Because CSV schema 2.3.0 does not contain start/end columns or byte
 offsets, a row is excluded when its file, function name, function type, start
 line, and end line tuple matches more than one dataset row. This prevents a
 validator from receiving an ambiguous line-based segment. The count is reported

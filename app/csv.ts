@@ -1,8 +1,10 @@
 import { DEFAULT_THRESHOLDS } from "./analyzer.ts";
 import type { MethodResult, Thresholds } from "./analyzer.ts";
 
-export const CSV_SCHEMA_VERSION = "2.2.0";
-export const DETECTOR_VERSION = "0.4.0";
+export const CSV_SCHEMA_VERSION = "2.3.0";
+export const DETECTOR_VERSION = "0.5.0";
+
+export type ProjectGroupingMode = "single-project" | "direct-subfolders";
 
 export type CsvExportContext = {
   thresholds: Thresholds;
@@ -10,6 +12,7 @@ export type CsvExportContext = {
   selectedFileCount: number;
   successfulFileCount: number;
   parseFailureCount: number;
+  projectGrouping: ProjectGroupingMode;
 };
 
 export type ParseFailureExport = {
@@ -65,6 +68,7 @@ export const CSV_HEADERS = [
   "FILES_SELECTED",
   "FILES_ANALYZED",
   "PARSE_FAILURE_COUNT",
+  "PROJECT_GROUPING",
   "LONG_LOC_THRESHOLD",
   "LONG_COMPOUND_ENABLED",
   "LONG_CYCLO_THRESHOLD",
@@ -89,6 +93,7 @@ export const PARSE_FAILURE_HEADERS = [
   "PARSER_VERSION",
   "CSV_SCHEMA_VERSION",
   "DETECTOR_VERSION",
+  "PROJECT_GROUPING",
   "ERROR_MESSAGE",
 ] as const;
 
@@ -111,6 +116,7 @@ function defaultContext(results: MethodResult[]): CsvExportContext {
     selectedFileCount: new Set(results.map((result) => result.relativePath)).size,
     successfulFileCount: new Set(results.map((result) => result.relativePath)).size,
     parseFailureCount: 0,
+    projectGrouping: "single-project",
   };
 }
 
@@ -165,6 +171,7 @@ export function toCsv(results: MethodResult[], context: CsvExportContext = defau
       context.selectedFileCount,
       context.successfulFileCount,
       context.parseFailureCount,
+      context.projectGrouping,
       context.thresholds.longLoc,
       Number(context.thresholds.longCompound),
       context.thresholds.longCyclo,
@@ -207,6 +214,7 @@ export function toParseFailuresCsv(
   project: string,
   failures: ParseFailureExport[],
   parserVersion: string,
+  projectGrouping: ProjectGroupingMode = "single-project",
 ): string {
   const lines = [PARSE_FAILURE_HEADERS.join(",")];
   for (const failure of failures) {
@@ -216,6 +224,7 @@ export function toParseFailuresCsv(
       parserVersion,
       CSV_SCHEMA_VERSION,
       DETECTOR_VERSION,
+      projectGrouping,
       failure.message,
     ].map(csvEscape).join(","));
   }
@@ -227,6 +236,7 @@ export function downloadParseFailuresCsv(
   failures: ParseFailureExport[],
   parserVersion: string,
   filename: string,
+  projectGrouping: ProjectGroupingMode = "single-project",
 ) {
-  downloadText(toParseFailuresCsv(project, failures, parserVersion), filename);
+  downloadText(toParseFailuresCsv(project, failures, parserVersion, projectGrouping), filename);
 }

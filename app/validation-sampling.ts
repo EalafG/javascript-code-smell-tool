@@ -48,6 +48,7 @@ export type SamplingBuildContext = {
   selectedFileCount: number;
   successfulFileCount: number;
   parseFailureCount: number;
+  projectGrouping: "single-project" | "direct-subfolders";
 };
 
 export type SamplingArtifact = {
@@ -156,6 +157,10 @@ function isEmptyFunction(result: MethodResult): boolean {
 
 function normalizedSource(result: MethodResult): string {
   return result.source.replace(/\r\n|\r/g, "\n").trim();
+}
+
+function sourceWithNearbyContext(result: MethodResult): string {
+  return [result.contextBefore, result.source, result.contextAfter].filter(Boolean).join("\n");
 }
 
 function preparePopulation(
@@ -593,7 +598,7 @@ export async function buildValidationSamplePackage(
     contextStartLine: config.includeNearbyContext ? item.result.contextStartLine : item.result.startLine,
     contextEndLine: config.includeNearbyContext ? item.result.contextEndLine : item.result.endLine,
     sourceSegment: item.result.source,
-    sourceContext: config.includeNearbyContext ? item.result.sourceContext : item.result.source,
+    sourceContext: config.includeNearbyContext ? sourceWithNearbyContext(item.result) : item.result.source,
     segmentSha256,
     protocolVersion: "2.0.0",
   }));
@@ -683,6 +688,7 @@ export async function buildValidationSamplePackage(
       filesSelected: context.selectedFileCount,
       filesAnalyzed: context.successfulFileCount,
       parseFailureCount: context.parseFailureCount,
+      projectGrouping: context.projectGrouping,
     },
     design: {
       ...config,

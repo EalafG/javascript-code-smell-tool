@@ -4,19 +4,19 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_THRESHOLDS,
   MethodResult,
-  ParsedSource,
   SourceCategory,
   analyzeParsedSource,
-  assignDeterministicIds,
   classifySourceCategory,
   classifyResult,
   createProjectAnalysisModel,
-  deduplicateMethodResults,
+  disposeProjectAnalysisModel,
+  finalizeMethodResultsInPlace,
   finalizeProjectAnalysisModel,
   indexParsedSource,
   parseJavaScriptSource,
 } from "./analyzer";
 import { downloadCsv, downloadParseFailuresCsv } from "./csv";
+import type { ProjectGroupingMode } from "./csv";
 import { useCodeThemePreference } from "./code-theme";
 import { CodeThemeToggle, SyntaxCode } from "./code-viewer";
 import { ValidationSampleBuilder } from "./ValidationSampleBuilder";
@@ -36,6 +36,7 @@ type ParserStatus = "loading" | "ready" | "unavailable" | "parse-error";
 type ResultTab = "dataset" | "segments" | "distribution";
 type StatusFilter = "all" | "clean" | "smelly";
 type SmellFilter = "all" | "long" | "complex" | "conditional" | "envy";
+type ProjectOrganization = ProjectGroupingMode;
 
 type SelectedFile = {
   file: File;
@@ -49,6 +50,7 @@ type ParseFailure = {
 
 const SUPPORTED_EXTENSION = /\.(js|mjs|cjs|jsx)$/i;
 const PAGE_SIZE = 100;
+const COLLECTION_ROOT_NAMES = new Set(["dataset", "datasets", "project", "projects", "repo", "repos", "repositories", "sample", "samples", "source", "sources"]);
 const publicAsset = (fileName: string) => `${import.meta.env.BASE_URL}${fileName}`;
 const CATEGORY_LABELS: Record<Exclude<SourceCategory, "production">, string> = {
   test: "Tests and specs",
@@ -78,6 +80,16 @@ function loadScript(source: string): Promise<void> {
 function numberFromInput(value: string, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function analysisProjectFor(relativePath: string, fallback: string, organization: ProjectOrganization): string {
+  if (organization === "single-project" || relativePath === "pasted-snippet.js") return fallback;
+  const parts = relativePath.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.length >= 3 ? parts[1] : fallback;
+}
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 function MetricPill({ label, value }: { label: string; value: string | number }) {
@@ -130,6 +142,7 @@ export default function Home() {
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [snippet, setSnippet] = useState("");
   const [projectName, setProjectName] = useState("javascript-project");
+  const [projectOrganization, setProjectOrganization] = useState<ProjectOrganization>("single-project");
   const [ignoredFolders, setIgnoredFolders] = useState<Record<string, boolean>>({
     node_modules: true,
     dist: true,
@@ -149,7 +162,7 @@ export default function Home() {
   const [filesAnalyzed, setFilesAnalyzed] = useState(0);
   const [filesSubmitted, setFilesSubmitted] = useState(0);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [progress, setProgress] = useState({ current: 0, total: 0, stage: "" });
   const [inputMessage, setInputMessage] = useState("");
   const [activeTab, setActiveTab] = useState<ResultTab>("dataset");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -161,6 +174,7 @@ export default function Home() {
   const [codeTheme, setCodeTheme] = useCodeThemePreference();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const cancelAnalysisRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,25 +221,45 @@ export default function Home() {
 
   const skippedFileCount = selectedFiles.length - activeFiles.length;
 
+  const analysisProjectCount = useMemo(() => {
+    if (!activeFiles.length && !snippet.trim()) return 0;
+    const fallback = projectName.trim() || "javascript-project";
+    return new Set([
+      ...activeFiles.map(({ relativePath }) => analysisProjectFor(relativePath, fallback, projectOrganization)),
+      ...(snippet.trim() ? [fallback] : []),
+    ]).size;
+  }, [activeFiles, projectName, projectOrganization, snippet]);
+
   const exportContext = useMemo(() => ({
     thresholds,
     parserVersion: parserVersion || "Acorn 8+",
     selectedFileCount: filesSubmitted,
     successfulFileCount: filesAnalyzed,
     parseFailureCount: parseFailures.length,
-  }), [thresholds, parserVersion, filesSubmitted, filesAnalyzed, parseFailures.length]);
+    projectGrouping: projectOrganization,
+  }), [thresholds, parserVersion, filesSubmitted, filesAnalyzed, parseFailures.length, projectOrganization]);
 
   const stats = useMemo(() => {
-    const count = (predicate: (result: MethodResult) => boolean) => results.filter(predicate).length;
-    const smelly = count((result) => result.isSmelly);
+    let smelly = 0;
+    let long = 0;
+    let complex = 0;
+    let conditional = 0;
+    let envy = 0;
+    for (const result of results) {
+      if (result.isSmelly) smelly += 1;
+      if (result.isLongMethod) long += 1;
+      if (result.isComplexMethod) complex += 1;
+      if (result.isComplexConditional) conditional += 1;
+      if (result.isFeatureEnvy) envy += 1;
+    }
     return {
       methods: results.length,
       clean: results.length - smelly,
       smelly,
-      long: count((result) => result.isLongMethod),
-      complex: count((result) => result.isComplexMethod),
-      conditional: count((result) => result.isComplexConditional),
-      envy: count((result) => result.isFeatureEnvy),
+      long,
+      complex,
+      conditional,
+      envy,
     };
   }, [results]);
 
@@ -264,6 +298,13 @@ export default function Home() {
     if (folderSelection && incoming[0]?.relativePath.includes("/")) {
       const inferredProject = incoming[0].relativePath.split("/")[0];
       setProjectName((current) => current === "javascript-project" ? inferredProject : current);
+      const nestedProjects = new Set(incoming.map(({ relativePath }) => {
+        const parts = relativePath.split("/").filter(Boolean);
+        return parts.length >= 3 ? parts[1] : "";
+      }).filter(Boolean));
+      if (COLLECTION_ROOT_NAMES.has(inferredProject.toLowerCase()) && nestedProjects.size > 1) {
+        setProjectOrganization("direct-subfolders");
+      }
     }
     setInputMessage(files.length ? "" : "No supported JavaScript files were found in that selection.");
     event.target.value = "";
@@ -275,19 +316,23 @@ export default function Home() {
       return;
     }
 
+    const fallbackProject = projectName.trim() || "javascript-project";
     const sourceEntries: Array<{
       fileName: string;
       relativePath: string;
+      project: string;
       read: () => Promise<string>;
     }> = activeFiles.map(({ file, relativePath }) => ({
       fileName: file.name,
       relativePath,
+      project: analysisProjectFor(relativePath, fallbackProject, projectOrganization),
       read: () => file.text(),
     }));
     if (snippet.trim()) {
       sourceEntries.push({
         fileName: "pasted-snippet.js",
         relativePath: "pasted-snippet.js",
+        project: fallbackProject,
         read: async () => snippet,
       });
     }
@@ -299,67 +344,144 @@ export default function Home() {
     }
 
     setIsAnalyzing(true);
+    cancelAnalysisRef.current = false;
     setInputMessage("");
+    setRawResults([]);
     setParseFailures([]);
+    setFilesAnalyzed(0);
     setParserStatus("ready");
     setFilesSubmitted(sourceEntries.length);
-    setProgress({ current: 0, total: sourceEntries.length * 2 });
+    setProgress({ current: 0, total: sourceEntries.length * 2, stage: "Preparing project groups" });
 
     const failures: ParseFailure[] = [];
     const collected: MethodResult[] = [];
-    const parsedSources: ParsedSource[] = [];
     let successfulFiles = 0;
     let completedWork = 0;
+    let lastUiUpdate = 0;
     const totalWork = sourceEntries.length * 2;
-    const inferenceModel = createProjectAnalysisModel("P-0001");
-
+    const groupedEntries = new Map<string, typeof sourceEntries>();
     for (const entry of sourceEntries) {
-      try {
-        const source = await entry.read();
-        const descriptor = {
-          project: projectName.trim() || "javascript-project",
-          fileName: entry.fileName,
-          relativePath: entry.relativePath,
-        };
-        const parsed = parseJavaScriptSource(window.acorn, source, descriptor);
-        indexParsedSource(inferenceModel, parsed);
-        parsedSources.push(parsed);
-        completedWork += 1;
-      } catch (error) {
-        failures.push({
-          file: entry.relativePath,
-          message: error instanceof Error ? error.message : String(error),
-        });
-        completedWork += 2;
+      const group = groupedEntries.get(entry.project) ?? [];
+      group.push(entry);
+      groupedEntries.set(entry.project, group);
+    }
+    const projectGroups = [...groupedEntries.entries()].sort(([a], [b]) => a.localeCompare(b));
+    await yieldToBrowser();
+
+    async function updateProgress(stage: string, force = false) {
+      const now = performance.now();
+      if (force || now - lastUiUpdate >= 80) {
+        setProgress({ current: completedWork, total: totalWork, stage });
+        lastUiUpdate = now;
+        await yieldToBrowser();
       }
-      setProgress({ current: completedWork, total: totalWork });
-      if (completedWork % 12 === 0) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     }
 
-    finalizeProjectAnalysisModel(inferenceModel);
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    try {
+      for (let projectIndex = 0; projectIndex < projectGroups.length; projectIndex += 1) {
+        if (cancelAnalysisRef.current) break;
+        const [analysisProject, projectEntries] = projectGroups[projectIndex];
+        const projectLabel = `${analysisProject} · project ${projectIndex + 1}/${projectGroups.length}`;
+        const inferenceModel = createProjectAnalysisModel(`P-${String(projectIndex + 1).padStart(4, "0")}`);
+        const indexedEntries: typeof sourceEntries = [];
 
-    for (const parsed of parsedSources) {
-      try {
-        collected.push(...analyzeParsedSource(parsed, thresholds, inferenceModel));
-        successfulFiles += 1;
-      } catch (error) {
-        failures.push({
-          file: parsed.descriptor.relativePath,
-          message: error instanceof Error ? error.message : String(error),
-        });
+        for (const entry of projectEntries) {
+          if (cancelAnalysisRef.current) break;
+          try {
+            const source = await entry.read();
+            const parsed = parseJavaScriptSource(window.acorn, source, {
+              project: analysisProject,
+              fileName: entry.fileName,
+              relativePath: entry.relativePath,
+            });
+            indexParsedSource(inferenceModel, parsed);
+            indexedEntries.push(entry);
+            completedWork += 1;
+          } catch (error) {
+            failures.push({
+              file: entry.relativePath,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            completedWork += 2;
+          }
+          await updateProgress(`Indexing ${projectLabel}`);
+        }
+
+        if (cancelAnalysisRef.current) {
+          disposeProjectAnalysisModel(inferenceModel);
+          break;
+        }
+        if (!indexedEntries.length) {
+          disposeProjectAnalysisModel(inferenceModel);
+          continue;
+        }
+        await updateProgress(`Resolving Feature Envy types for ${projectLabel}`, true);
+        try {
+          finalizeProjectAnalysisModel(inferenceModel);
+        } catch (error) {
+          failures.push({
+            file: `${analysisProject}/`,
+            message: `Project inference failed: ${error instanceof Error ? error.message : String(error)}`,
+          });
+          completedWork += indexedEntries.length;
+          disposeProjectAnalysisModel(inferenceModel);
+          await updateProgress(`Skipped ${projectLabel} after an inference failure`, true);
+          continue;
+        }
+
+        for (const entry of indexedEntries) {
+          if (cancelAnalysisRef.current) break;
+          try {
+            // Reparse one file at a time rather than retaining every project AST.
+            // This deliberately trades some CPU time for a much lower memory peak.
+            const source = await entry.read();
+            const parsed = parseJavaScriptSource(window.acorn, source, {
+              project: analysisProject,
+              fileName: entry.fileName,
+              relativePath: entry.relativePath,
+            });
+            for (const result of analyzeParsedSource(parsed, thresholds, inferenceModel)) collected.push(result);
+            successfulFiles += 1;
+          } catch (error) {
+            failures.push({
+              file: entry.relativePath,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+          completedWork += 1;
+          await updateProgress(`Measuring methods in ${projectLabel}`);
+        }
+        disposeProjectAnalysisModel(inferenceModel);
+        await updateProgress(`Released analysis memory for ${projectLabel}`, true);
       }
-      completedWork += 1;
-      setProgress({ current: completedWork, total: totalWork });
-      if (completedWork % 12 === 0) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    }
 
-    setRawResults(assignDeterministicIds(deduplicateMethodResults(collected)));
-    setFilesAnalyzed(successfulFiles);
-    setParseFailures(failures);
-    setParserStatus(failures.length ? "parse-error" : "ready");
-    setIsAnalyzing(false);
-    setActiveTab("dataset");
+      if (cancelAnalysisRef.current) {
+        setInputMessage("Analysis cancelled safely. Partial results were discarded.");
+        return;
+      }
+
+      setProgress({ current: totalWork, total: totalWork, stage: "Preparing deterministic method IDs" });
+      await yieldToBrowser();
+      setRawResults(finalizeMethodResultsInPlace(collected));
+      setFilesAnalyzed(successfulFiles);
+      setParseFailures(failures);
+      setParserStatus(failures.length ? "parse-error" : "ready");
+      setActiveTab("dataset");
+      if (projectGroups.length > 1) {
+        setInputMessage(`${projectGroups.length} projects were analyzed independently to limit memory use and preserve project-level Feature Envy inference.`);
+      }
+    } catch (error) {
+      setParseFailures(failures);
+      setInputMessage(`Analysis stopped safely: ${error instanceof Error ? error.message : String(error)}. Try excluding generated code or enabling multi-project mode for a repository collection.`);
+    } finally {
+      cancelAnalysisRef.current = false;
+      setIsAnalyzing(false);
+    }
+  }
+
+  function cancelAnalysis() {
+    cancelAnalysisRef.current = true;
+    setInputMessage("Stopping after the current file…");
   }
 
   const parserLabel = {
@@ -427,14 +549,17 @@ export default function Home() {
                 Analyze files, a project folder, or a pasted JavaScript sample. Processing stays on this device.
               </p>
             </div>
-            <button
-              className="primary-button"
-              type="button"
-              onClick={runAnalysis}
-              disabled={isAnalyzing || parserStatus === "loading" || parserStatus === "unavailable"}
-            >
-              {isAnalyzing ? `Analyzing ${progress.current}/${progress.total}` : "Analyze source"}
-            </button>
+            <div className="analysis-actions">
+              <button
+                className="primary-button"
+                type="button"
+                onClick={runAnalysis}
+                disabled={isAnalyzing || parserStatus === "loading" || parserStatus === "unavailable"}
+              >
+                {isAnalyzing ? `Analyzing ${progress.current}/${progress.total}` : "Analyze source"}
+              </button>
+              {isAnalyzing && <button className="secondary-button" type="button" onClick={cancelAnalysis}>Cancel safely</button>}
+            </div>
           </div>
 
           <div className="project-row">
@@ -494,7 +619,7 @@ export default function Home() {
               {skippedFileCount > 0 && <span> · {skippedFileCount} ignored by active exclusion rules</span>}
             </div>
             {(selectedFiles.length > 0 || snippet) && (
-              <button type="button" className="text-button" onClick={() => { setSelectedFiles([]); setSnippet(""); }}>
+              <button type="button" className="text-button" onClick={() => { setSelectedFiles([]); setSnippet(""); setProjectOrganization("single-project"); }}>
                 Clear input
               </button>
             )}
@@ -502,7 +627,7 @@ export default function Home() {
 
           <details className="source-options">
             <summary>
-              <span>Exclusion options</span>
+              <span>Analysis and exclusion options</span>
               <small>
                 {Object.values(ignoredFolders).filter(Boolean).length} folder rules active · {Object.values(excludedCategories).filter(Boolean).length} categories excluded
               </small>
@@ -538,12 +663,28 @@ export default function Home() {
                   </label>
                 ))}
               </fieldset>
+
+              <fieldset className="ignore-options project-mode-options">
+                <legend>Large repository collections</legend>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={projectOrganization === "direct-subfolders"}
+                    onChange={(event) => setProjectOrganization(event.target.checked ? "direct-subfolders" : "single-project")}
+                  />
+                  <span>Each direct subfolder is a separate project</span>
+                </label>
+                <small>{analysisProjectCount || 0} project group{analysisProjectCount === 1 ? "" : "s"} detected · analyzed sequentially to reduce memory</small>
+              </fieldset>
             </div>
           </details>
 
           {isAnalyzing && (
-            <div className="progress-track" aria-label={`Analyzed ${progress.current} of ${progress.total} files`}>
-              <span style={{ width: `${progress.total ? (progress.current / progress.total) * 100 : 0}%` }} />
+            <div className="analysis-progress" role="status" aria-label={`Completed ${progress.current} of ${progress.total} analysis steps`}>
+              <div><span>{progress.stage}</span><strong>{progress.current.toLocaleString()} / {progress.total.toLocaleString()}</strong></div>
+              <div className="progress-track">
+                <span style={{ width: `${progress.total ? (progress.current / progress.total) * 100 : 0}%` }} />
+              </div>
             </div>
           )}
           {inputMessage && <p className="inline-message">{inputMessage}</p>}
@@ -661,9 +802,12 @@ export default function Home() {
               <summary>{parseFailures.length} source file{parseFailures.length === 1 ? "" : "s"} could not be parsed</summary>
               <p>These failures did not interrupt analysis of the remaining files.</p>
               <ul>
-                {parseFailures.map((failure) => (
+                {parseFailures.slice(0, 100).map((failure) => (
                   <li key={`${failure.file}-${failure.message}`}><strong>{failure.file}</strong><span>{failure.message}</span></li>
                 ))}
+                {parseFailures.length > 100 && (
+                  <li><strong>Additional failures</strong><span>{(parseFailures.length - 100).toLocaleString()} more are available in the parse-failure CSV export.</span></li>
+                )}
               </ul>
             </details>
           )}
@@ -684,6 +828,7 @@ export default function Home() {
                   parseFailures,
                   parserVersion || "Acorn 8+",
                   "javascript-code-smell-parse-failures.csv",
+                  projectOrganization,
                 )}>Export parse failures</button>
               )}
               <button className="secondary-button" type="button" disabled={!results.length} onClick={() => downloadCsv(results, "javascript-code-smell-dataset.csv", exportContext)}>Export all CSV</button>

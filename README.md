@@ -36,6 +36,8 @@ The production build uses relative asset URLs so the local Acorn parser and UPM 
 
 The interface accepts individual `.js`, `.mjs`, `.cjs`, and `.jsx` files, a complete folder with preserved relative paths, or a pasted JavaScript snippet. Folder rules can skip `node_modules`, `dist`, `build`, and `coverage`. Optional category rules can exclude tests/specs, fixtures, vendor code, benchmarks, and maintenance scripts. Every included method is assigned a reproducible `CODE_CATEGORY` value.
 
+For a folder that contains multiple repository subfolders, enable **Each direct subfolder is a separate project** under Analysis and exclusion options. Recognized umbrella folders such as `Sample`, `projects`, and `repositories` enable this automatically. The detector then processes one project at a time, performs project-local Feature Envy inference, reparses only one source file at a time during metric extraction, and explicitly releases each completed inference model. This reduces peak browser memory while keeping cross-file inference within each real project. Analysis can also be cancelled safely between files.
+
 ## Validation sample builder
 
 After an analysis, select **Create validation sample** in the results toolbar. The browser wizard can draw a pilot, representative, or detector-audit sample without uploading source code to a server. It supports a deterministic seed, natural or controlled predicted-class distribution, proportional or equal project allocation, project limits, per-smell coverage minima, multi-smell and near-threshold coverage, source-category exclusions, exact-source deduplication, and balanced assignment to multiple validators.
@@ -83,7 +85,7 @@ The exported metrics are:
 - `FE_TYPE_SET_LIMIT`: maximum concrete types retained in one inferred type set before adding `unknown:widened` (`12`)
 - `FE_SCOPE`: inference scope (`project`)
 - `FE_INDEXED_FILE_COUNT`: all successfully parsed project files indexed by the inference model
-- `FE_BATCH_ID`, `FE_BATCH_FILE_COUNT`, and `FE_BATCH_SIZE_LIMIT`: backward-compatible provenance columns; project-wide exports use `P-0001`, the project file count, and `0` (unbounded)
+- `FE_BATCH_ID`, `FE_BATCH_FILE_COUNT`, and `FE_BATCH_SIZE_LIMIT`: inference provenance columns; project groups receive deterministic `P-0001`, `P-0002`, … identifiers, the project file count, and `0` (unbounded within that project)
 - `FOREIGN_MEMBER_CALLS`: occurrence count of direct foreign member calls; calls also contribute their distinct property tuple to ATD/ATFD
 - `FOREIGN_CALL_PROVIDERS`: sorted inferred foreign provider types used by direct member calls
 
@@ -119,10 +121,10 @@ The paper uses JIPDA abstract interpretation and runtime-address abstractions. T
 CSV exports use one row per method and a fixed column order:
 
 ```text
-ID,PROJECT,FILE,CODE_CATEGORY,FUNCTION,FUNCTION_TYPE,START_LINE,END_LINE,LOC,SPAN_LOC,COMMENT_LINES,BLANK_LINES,DELIMITER_LINES,CYCLO,MAXNESTING,NOP,NOLV,CONDOPS_MAX,LOGICAL_OPS_MAX,COND_NESTING,NUM_CONDITIONS,ATD,ATFD,LOCAL_ACCESS_COUNT,LAA,LAA_EXACT,FDP,FOREIGN_PROVIDERS,COUPLING_TUPLES,TYPE_INFERENCE_COVERAGE,UNKNOWN_ACCESS_COUNT,FE_INFERENCE_MODE,FE_MAX_ITERATIONS,FE_TYPE_SET_LIMIT,FE_BATCH_ID,FE_BATCH_FILE_COUNT,FE_BATCH_SIZE_LIMIT,FE_SCOPE,FE_INDEXED_FILE_COUNT,FOREIGN_MEMBER_CALLS,FOREIGN_CALL_PROVIDERS,CSV_SCHEMA_VERSION,DETECTOR_VERSION,PARSER_VERSION,FILES_SELECTED,FILES_ANALYZED,PARSE_FAILURE_COUNT,LONG_LOC_THRESHOLD,LONG_COMPOUND_ENABLED,LONG_CYCLO_THRESHOLD,LONG_NESTING_THRESHOLD,COMPLEX_CYCLO_THRESHOLD,CONDITIONAL_OPS_THRESHOLD,CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED,FEW_THRESHOLD,is_long_method,is_complex_method,is_complex_conditional,is_complex_conditional_sonar,is_feature_envy,is_smelly,SMELL_COUNT,SMELL_TYPES
+ID,PROJECT,FILE,CODE_CATEGORY,FUNCTION,FUNCTION_TYPE,START_LINE,END_LINE,LOC,SPAN_LOC,COMMENT_LINES,BLANK_LINES,DELIMITER_LINES,CYCLO,MAXNESTING,NOP,NOLV,CONDOPS_MAX,LOGICAL_OPS_MAX,COND_NESTING,NUM_CONDITIONS,ATD,ATFD,LOCAL_ACCESS_COUNT,LAA,LAA_EXACT,FDP,FOREIGN_PROVIDERS,COUPLING_TUPLES,TYPE_INFERENCE_COVERAGE,UNKNOWN_ACCESS_COUNT,FE_INFERENCE_MODE,FE_MAX_ITERATIONS,FE_TYPE_SET_LIMIT,FE_BATCH_ID,FE_BATCH_FILE_COUNT,FE_BATCH_SIZE_LIMIT,FE_SCOPE,FE_INDEXED_FILE_COUNT,FOREIGN_MEMBER_CALLS,FOREIGN_CALL_PROVIDERS,CSV_SCHEMA_VERSION,DETECTOR_VERSION,PARSER_VERSION,FILES_SELECTED,FILES_ANALYZED,PARSE_FAILURE_COUNT,PROJECT_GROUPING,LONG_LOC_THRESHOLD,LONG_COMPOUND_ENABLED,LONG_CYCLO_THRESHOLD,LONG_NESTING_THRESHOLD,COMPLEX_CYCLO_THRESHOLD,CONDITIONAL_OPS_THRESHOLD,CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED,FEW_THRESHOLD,is_long_method,is_complex_method,is_complex_conditional,is_complex_conditional_sonar,is_feature_envy,is_smelly,SMELL_COUNT,SMELL_TYPES
 ```
 
-Schema `2.2.0` uses detector `0.4.0`. Binary labels use `0` and `1`. Multi-valued providers and smell types use `|`. Values containing commas, quotes, or line breaks are escaped according to CSV conventions. Each dataset row repeats the schema version, detector version, parser version, file counts, parse-failure count, and active thresholds so the labels can be reproduced independently. Parsing failures can also be exported as a separate deterministic CSV manifest.
+Schema `2.3.0` uses detector `0.5.0`. Binary labels use `0` and `1`. Multi-valued providers and smell types use `|`. Values containing commas, quotes, or line breaks are escaped according to CSV conventions. Each dataset row repeats the schema version, detector version, parser version, file counts, parse-failure count, project-grouping mode, and active thresholds so the labels can be reproduced independently. Parsing failures can also be exported as a separate deterministic CSV manifest.
 
 ## Reliability checks
 
@@ -133,4 +135,4 @@ pnpm lint
 pnpm build
 ```
 
-The tests cover duplicate avoidance, nested-function isolation, JSX, optional chaining, empty and anonymous functions, substantive/comment/blank/delimiter line classification, metric calculations, distinct coupling tuples, call-site parameter flow, `this`-hierarchy locality, aliases, array-index normalization, property additions/updates, inference uncertainty, deterministic IDs, the browser-local Acorn bundle, and CSV escaping.
+The tests cover duplicate avoidance, nested-function isolation, JSX, optional chaining, empty and anonymous functions, substantive/comment/blank/delimiter line classification, metric calculations, distinct coupling tuples, call-site parameter flow, `this`-hierarchy locality, aliases, array-index normalization, property additions/updates, inference uncertainty, deterministic IDs, two-pass low-memory equivalence and disposal, the browser-local Acorn bundle, validation-package blinding, and CSV escaping.

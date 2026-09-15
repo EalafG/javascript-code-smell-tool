@@ -56,7 +56,8 @@ function method(
     relativePath,
     functionName: `method${index}`,
     source,
-    sourceContext: source,
+    contextBefore: "",
+    contextAfter: "",
     isLongMethod: enabled.isLongMethod,
     isComplexMethod: enabled.isComplexMethod,
     isComplexConditional: enabled.isComplexConditional,
@@ -102,6 +103,7 @@ const context = {
   selectedFileCount: 16,
   successfulFileCount: 16,
   parseFailureCount: 0,
+  projectGrouping: "direct-subfolders" as const,
 };
 
 test("builds a deterministic blinded sample and keeps private detector evidence separate", async () => {
@@ -163,7 +165,7 @@ test("automatic grouping distinguishes an umbrella dataset from one project", ()
 
 test("preview records deterministic exclusion reasons", () => {
   const original = method(1, "alpha");
-  const duplicate = { ...method(2, "alpha"), source: original.source, sourceContext: original.source };
+  const duplicate = { ...method(2, "alpha"), source: original.source };
   const testMethod = { ...method(3, "alpha", {}, "alpha/tests/example.test.js"), codeCategory: "test" as const };
   const options = config([original, duplicate, testMethod]);
   options.sampleSize = 1;

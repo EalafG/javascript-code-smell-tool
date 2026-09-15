@@ -1,6 +1,7 @@
 import {
   calculateFeatureEnvyMetrics,
   createFeatureEnvyModel,
+  disposeFeatureEnvyModel,
   finalizeFeatureEnvyModel,
   indexFeatureEnvySource,
 } from "./feature-envy.ts";
@@ -116,7 +117,8 @@ export type MethodResult = {
   smellCount: number;
   smellTypes: string[];
   source: string;
-  sourceContext: string;
+  contextBefore: string;
+  contextAfter: string;
 };
 
 export type AstNode = {
@@ -499,6 +501,18 @@ export function classifyResult(result: MethodResult, thresholds: Thresholds): Me
     isFeatureEnvy ? "Feature Envy" : null,
   ].filter((value): value is string => Boolean(value));
 
+  const labelsUnchanged =
+    result.isLongMethod === isLongMethod &&
+    result.isComplexMethod === isComplexMethod &&
+    result.isComplexConditional === isComplexConditional &&
+    result.isComplexConditionalSonar === isComplexConditionalSonar &&
+    result.isFeatureEnvy === isFeatureEnvy &&
+    result.isSmelly === (smellTypes.length > 0) &&
+    result.smellCount === smellTypes.length &&
+    result.smellTypes.length === smellTypes.length &&
+    result.smellTypes.every((value, index) => value === smellTypes[index]);
+  if (labelsUnchanged) return result;
+
   return {
     ...result,
     isLongMethod,
@@ -557,6 +571,10 @@ export function finalizeProjectAnalysisModel(model: ProjectAnalysisModel) {
   finalizeFeatureEnvyModel(model);
 }
 
+export function disposeProjectAnalysisModel(model: ProjectAnalysisModel) {
+  disposeFeatureEnvyModel(model);
+}
+
 export function analyzeParsedSource(
   parsed: ParsedSource,
   thresholds: Thresholds,
@@ -587,7 +605,8 @@ export function analyzeParsedSource(
       ...metrics,
       contextStartLine,
       contextEndLine,
-      sourceContext: sourceLines.slice(contextStartLine - 1, contextEndLine).join("\n"),
+      contextBefore: sourceLines.slice(contextStartLine - 1, metrics.startLine - 1).join("\n"),
+      contextAfter: sourceLines.slice(metrics.endLine, contextEndLine).join("\n"),
       isLongMethod: false,
       isComplexMethod: false,
       isComplexConditional: false,
@@ -629,28 +648,50 @@ export function analyzeProjectSources(
 
 export function assignDeterministicIds(results: MethodResult[]): MethodResult[] {
   return [...results]
-    .sort((a, b) =>
-      a.relativePath.localeCompare(b.relativePath) ||
-      a.startOffset - b.startOffset ||
-      a.endOffset - b.endOffset ||
-      a.startLine - b.startLine ||
-      a.endLine - b.endLine ||
-      a.functionName.localeCompare(b.functionName),
-    )
+    .sort(compareMethodResults)
     .map((result, index) => ({ ...result, id: `M-${String(index + 1).padStart(6, "0")}` }));
+}
+
+function compareMethodResults(a: MethodResult, b: MethodResult): number {
+  return a.relativePath.localeCompare(b.relativePath) ||
+    a.startOffset - b.startOffset ||
+    a.endOffset - b.endOffset ||
+    a.startLine - b.startLine ||
+    a.endLine - b.endLine ||
+    a.functionName.localeCompare(b.functionName);
+}
+
+function methodIdentity(result: MethodResult): string {
+  return [
+    result.relativePath,
+    result.functionType,
+    result.startOffset,
+    result.endOffset,
+    result.functionName,
+  ].join("\u0000");
 }
 
 export function deduplicateMethodResults(results: MethodResult[]): MethodResult[] {
   const unique = new Map<string, MethodResult>();
   for (const result of results) {
-    const key = [
-      result.relativePath,
-      result.functionType,
-      result.startOffset,
-      result.endOffset,
-      result.functionName,
-    ].join("\u0000");
+    const key = methodIdentity(result);
     if (!unique.has(key)) unique.set(key, result);
   }
   return [...unique.values()];
+}
+
+export function finalizeMethodResultsInPlace(results: MethodResult[]): MethodResult[] {
+  results.sort(compareMethodResults);
+  const seen = new Set<string>();
+  let outputIndex = 0;
+  for (const result of results) {
+    const key = methodIdentity(result);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.id = `M-${String(outputIndex + 1).padStart(6, "0")}`;
+    results[outputIndex] = result;
+    outputIndex += 1;
+  }
+  results.length = outputIndex;
+  return results;
 }

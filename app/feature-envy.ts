@@ -913,6 +913,26 @@ export function finalizeFeatureEnvyModel(model: FeatureEnvyModel) {
   model.solved = true;
 }
 
+export function disposeFeatureEnvyModel(model: FeatureEnvyModel) {
+  model.variableTypes.clear();
+  model.variableAliases.clear();
+  model.returnTypes.clear();
+  model.callReturnTypes.clear();
+  model.propertyTypes.clear();
+  model.knownProperties.clear();
+  model.initialProperties.clear();
+  model.thisTypes.clear();
+  model.parentTypes.clear();
+  model.functions.clear();
+  model.bindingLabels.clear();
+  model.sourceScopes.clear();
+  model.indexedSources.clear();
+  model.constraints.length = 0;
+  model.calls.length = 0;
+  model.thisConstraints.length = 0;
+  model.solved = false;
+}
+
 function ancestorTypes(model: FeatureEnvyModel, type: string): Set<string> {
   const ancestors = new Set<string>([type]);
   const queue = [type];
