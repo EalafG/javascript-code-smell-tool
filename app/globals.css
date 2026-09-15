@@ -382,6 +382,24 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mon
 .methodology-details p { margin: 9px 0 0; }
 
 .results-section { scroll-margin-top: 20px; }
+.analysis-basis {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 7px 18px;
+  border: 1px solid #cfe1da;
+  border-radius: 10px;
+  background: #f3faf7;
+}
+.analysis-basis div { display: grid; gap: 3px; }
+.analysis-basis strong { color: #235d49; }
+.analysis-basis span, .analysis-basis p { color: #5e6b66; font-size: 9px; line-height: 1.45; }
+.analysis-basis p { margin: 0; }
+.analysis-basis--changed { border-color: #ead7a6; background: #fffbef; }
+.analysis-basis--changed strong { color: #785814; }
 .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .summary-card {
   min-height: 127px;
@@ -720,6 +738,9 @@ body:has(.sample-builder-backdrop) { overflow: hidden; }
 .builder-preview-grid span, .builder-preview-grid strong { display: block; }
 .builder-preview-grid span { color: var(--upm-gray); font-size: 9px; font-weight: 700; }
 .builder-preview-grid strong { margin-top: 5px; font-size: 17px; }
+.builder-eligibility-warning { padding: 12px 14px; border: 1px solid #ead7a6; border-radius: 9px; color: #6f5114; background: #fffbef; }
+.builder-eligibility-warning strong { font-size: 11px; }
+.builder-eligibility-warning p { margin: 4px 0 0; font-size: 10px; line-height: 1.5; }
 .builder-output-note { border: 1px solid #d6e5df; color: #426157; background: #f3faf7; }
 .builder-output-note strong { color: #235d49; font-size: 11px; }
 .builder-output-note p { margin: 5px 0 0; }

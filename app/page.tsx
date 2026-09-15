@@ -16,7 +16,13 @@ import {
   parseJavaScriptSource,
 } from "./analyzer";
 import { partitionForInference, resourceRiskFor } from "./analysis-partitions";
-import { downloadAnalysisExclusionsCsv, downloadCsv, downloadParseFailuresCsv } from "./csv";
+import {
+  CSV_SCHEMA_VERSION,
+  DETECTOR_VERSION,
+  downloadAnalysisExclusionsCsv,
+  downloadCsv,
+  downloadParseFailuresCsv,
+} from "./csv";
 import type { ProjectGroupingMode } from "./csv";
 import { useCodeThemePreference } from "./code-theme";
 import { CodeThemeToggle, SyntaxCode } from "./code-viewer";
@@ -55,6 +61,15 @@ type AnalysisExclusion = {
   file: string;
   ruleId: string;
   reason: string;
+};
+
+type AnalysisRunProfile = {
+  key: string;
+  projectOrganization: ProjectOrganization;
+  resourceSafeguard: boolean;
+  discoveredFileCount: number;
+  ignoredFolders: string[];
+  excludedCategories: string[];
 };
 
 const SUPPORTED_EXTENSION = /\.(js|mjs|cjs|jsx)$/i;
@@ -169,6 +184,7 @@ export default function Home() {
   const [rawResults, setRawResults] = useState<MethodResult[]>([]);
   const [parseFailures, setParseFailures] = useState<ParseFailure[]>([]);
   const [analysisExclusions, setAnalysisExclusions] = useState<AnalysisExclusion[]>([]);
+  const [analysisRunProfile, setAnalysisRunProfile] = useState<AnalysisRunProfile | null>(null);
   const [resourceSafeguard, setResourceSafeguard] = useState(true);
   const [filesAnalyzed, setFilesAnalyzed] = useState(0);
   const [filesSubmitted, setFilesSubmitted] = useState(0);
@@ -241,15 +257,56 @@ export default function Home() {
     ]).size;
   }, [activeFiles, projectName, projectOrganization, snippet]);
 
+  const currentRunProfile = useMemo<AnalysisRunProfile>(() => {
+    const enabledFolders = Object.entries(ignoredFolders)
+      .filter(([, enabled]) => enabled)
+      .map(([folder]) => folder)
+      .sort();
+    const enabledCategories = Object.entries(excludedCategories)
+      .filter(([, enabled]) => enabled)
+      .map(([category]) => category)
+      .sort();
+    const inputFiles = selectedFiles
+      .map(({ file, relativePath }) => `${relativePath}\u0000${file.size}\u0000${file.lastModified}`)
+      .sort();
+    return {
+      key: JSON.stringify({
+        projectName: projectName.trim() || "javascript-project",
+        projectOrganization,
+        resourceSafeguard,
+        enabledFolders,
+        enabledCategories,
+        inputFiles,
+        snippet,
+      }),
+      projectOrganization,
+      resourceSafeguard,
+      discoveredFileCount: selectedFiles.length + Number(Boolean(snippet.trim())),
+      ignoredFolders: enabledFolders,
+      excludedCategories: enabledCategories,
+    };
+  }, [excludedCategories, ignoredFolders, projectName, projectOrganization, resourceSafeguard, selectedFiles, snippet]);
+
+  const analysisSettingsChanged = Boolean(
+    results.length && analysisRunProfile && analysisRunProfile.key !== currentRunProfile.key,
+  );
+
   const exportContext = useMemo(() => ({
     thresholds,
     parserVersion: parserVersion || "Acorn 8+",
+    analysisProfile: (analysisRunProfile?.resourceSafeguard ?? currentRunProfile.resourceSafeguard)
+      ? "authored-source-v1" as const
+      : "all-selected-source-v1" as const,
+    discoveredFileCount: analysisRunProfile?.discoveredFileCount ?? currentRunProfile.discoveredFileCount,
     selectedFileCount: filesSubmitted,
     successfulFileCount: filesAnalyzed,
     parseFailureCount: parseFailures.length,
     resourceExclusionCount: analysisExclusions.length,
-    projectGrouping: projectOrganization,
-  }), [thresholds, parserVersion, filesSubmitted, filesAnalyzed, parseFailures.length, analysisExclusions.length, projectOrganization]);
+    resourceSafeguardEnabled: analysisRunProfile?.resourceSafeguard ?? currentRunProfile.resourceSafeguard,
+    ignoredFolders: analysisRunProfile?.ignoredFolders ?? currentRunProfile.ignoredFolders,
+    excludedCategories: analysisRunProfile?.excludedCategories ?? currentRunProfile.excludedCategories,
+    projectGrouping: analysisRunProfile?.projectOrganization ?? currentRunProfile.projectOrganization,
+  }), [thresholds, parserVersion, filesSubmitted, filesAnalyzed, parseFailures.length, analysisExclusions.length, analysisRunProfile, currentRunProfile]);
 
   const stats = useMemo(() => {
     let smelly = 0;
@@ -358,12 +415,15 @@ export default function Home() {
       return;
     }
 
+    const runProfile = currentRunProfile;
+
     setIsAnalyzing(true);
     cancelAnalysisRef.current = false;
     setInputMessage("");
     setRawResults([]);
     setParseFailures([]);
     setAnalysisExclusions([]);
+    setAnalysisRunProfile(null);
     setFilesAnalyzed(0);
     setParserStatus("ready");
     setFilesSubmitted(sourceEntries.length);
@@ -509,6 +569,7 @@ export default function Home() {
       setProgress({ current: totalWork, total: totalWork, stage: "Preparing deterministic method IDs" });
       await yieldToBrowser();
       setRawResults(finalizeMethodResultsInPlace(collected));
+      setAnalysisRunProfile(runProfile);
       setFilesAnalyzed(successfulFiles);
       setParseFailures(failures);
       setAnalysisExclusions(resourceExclusions);
@@ -826,6 +887,20 @@ export default function Home() {
             </div>
           </div>
 
+          {analysisRunProfile && (
+            <div className={`analysis-basis ${analysisSettingsChanged ? "analysis-basis--changed" : ""}`} role="status">
+              <div>
+                <strong>{exportContext.analysisProfile === "authored-source-v1" ? "Authored-source profile" : "All selected source profile"}</strong>
+                <span>Detector {DETECTOR_VERSION} · CSV schema {CSV_SCHEMA_VERSION} · {exportContext.projectGrouping.replace("-", " ")}</span>
+              </div>
+              <p>
+                {filesSubmitted.toLocaleString()} files submitted · {analysisExclusions.length.toLocaleString()} resource exclusions · percentages use {results.length.toLocaleString()} analyzed methods.
+              </p>
+              <p>Threshold changes intentionally re-label this fixed method population and are recorded in every export.</p>
+              {analysisSettingsChanged && <p><strong>Settings changed after this run.</strong> Analyze again before comparing or exporting the new configuration.</p>}
+            </div>
+          )}
+
           <div className="summary-grid">
             {overviewCards.map(([label, value, detail], index) => (
               <article className={`summary-card ${index === 3 ? "summary-card--accent" : ""}`} key={label}>
@@ -1132,7 +1207,7 @@ export default function Home() {
 
         <footer>
           <strong>JavaScript Code Smell Detection Tool</strong>
-          <span>Acorn 8 · Method-level static analysis · Deterministic CSV schema</span>
+          <span>Detector {DETECTOR_VERSION} · CSV {CSV_SCHEMA_VERSION} · Method-level deterministic analysis</span>
         </footer>
       </div>
       {showSampleBuilder && (

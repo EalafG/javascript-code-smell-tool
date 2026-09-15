@@ -21,7 +21,9 @@ import {
 import type { MethodResult, Thresholds } from "../app/analyzer.ts";
 import {
   ANALYSIS_EXCLUSION_HEADERS,
+  CSV_SCHEMA_VERSION,
   CSV_HEADERS,
+  DETECTOR_VERSION,
   PARSE_FAILURE_HEADERS,
   toAnalysisExclusionsCsv,
   toCsv,
@@ -591,13 +593,49 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.ok(CSV_HEADERS.includes("CSV_SCHEMA_VERSION"));
   assert.ok(CSV_HEADERS.includes("DETECTOR_VERSION"));
   assert.ok(CSV_HEADERS.includes("PARSER_VERSION"));
+  assert.ok(CSV_HEADERS.includes("ANALYSIS_PROFILE"));
+  assert.ok(CSV_HEADERS.includes("FILES_DISCOVERED"));
   assert.ok(CSV_HEADERS.includes("RESOURCE_EXCLUSION_COUNT"));
+  assert.ok(CSV_HEADERS.includes("RESOURCE_SAFEGUARD_ENABLED"));
+  assert.ok(CSV_HEADERS.includes("IGNORED_FOLDERS"));
+  assert.ok(CSV_HEADERS.includes("EXCLUDED_SOURCE_CATEGORIES"));
   assert.ok(CSV_HEADERS.includes("PROJECT_GROUPING"));
   assert.ok(CSV_HEADERS.includes("LONG_LOC_THRESHOLD"));
   assert.ok(CSV_HEADERS.includes("CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED"));
   assert.ok(CSV_HEADERS.includes("is_complex_conditional_sonar"));
   assert.ok(CSV_HEADERS.includes("FEW_THRESHOLD"));
   assert.ok(csv.endsWith("\r\n"));
+});
+
+test("freezes analysis-population provenance in every dataset row", () => {
+  const [result] = assignDeterministicIds(analyze("function clean() {}", "src/clean.js"));
+  const csv = toCsv([result], {
+    thresholds,
+    parserVersion: "Acorn 8.15.0",
+    analysisProfile: "authored-source-v1",
+    discoveredFileCount: 20,
+    selectedFileCount: 17,
+    successfulFileCount: 15,
+    parseFailureCount: 1,
+    resourceExclusionCount: 1,
+    resourceSafeguardEnabled: true,
+    ignoredFolders: ["build", "dist"],
+    excludedCategories: ["test", "vendor"],
+    projectGrouping: "direct-subfolders",
+  });
+  const values = csv.trimEnd().split("\r\n")[1].split(",");
+
+  assert.equal(values.length, CSV_HEADERS.length);
+  assert.equal(values[CSV_HEADERS.indexOf("CSV_SCHEMA_VERSION")], CSV_SCHEMA_VERSION);
+  assert.equal(values[CSV_HEADERS.indexOf("DETECTOR_VERSION")], DETECTOR_VERSION);
+  assert.equal(values[CSV_HEADERS.indexOf("ANALYSIS_PROFILE")], "authored-source-v1");
+  assert.equal(values[CSV_HEADERS.indexOf("FILES_DISCOVERED")], "20");
+  assert.equal(values[CSV_HEADERS.indexOf("FILES_SELECTED")], "17");
+  assert.equal(values[CSV_HEADERS.indexOf("FILES_ANALYZED")], "15");
+  assert.equal(values[CSV_HEADERS.indexOf("RESOURCE_SAFEGUARD_ENABLED")], "1");
+  assert.equal(values[CSV_HEADERS.indexOf("IGNORED_FOLDERS")], "build|dist");
+  assert.equal(values[CSV_HEADERS.indexOf("EXCLUDED_SOURCE_CATEGORIES")], "test|vendor");
+  assert.equal(values[CSV_HEADERS.indexOf("PROJECT_GROUPING")], "direct-subfolders");
 });
 
 test("exports parse failures as a stable escaped CSV", () => {

@@ -15,6 +15,8 @@ export const SAMPLING_SMELLS: Array<{ key: SamplingSmellKey; label: string }> = 
   { key: "featureEnvy", label: "Feature Envy" },
 ];
 
+export const SAMPLING_PROTOCOL_VERSION = "2.0.1";
+
 export type ValidationSamplingConfig = {
   preset: SamplingPreset;
   phase: SamplingPhase;
@@ -45,10 +47,15 @@ export type ValidationSamplingConfig = {
 export type SamplingBuildContext = {
   thresholds: Thresholds;
   parserVersion: string;
+  analysisProfile: "authored-source-v1" | "all-selected-source-v1";
+  discoveredFileCount: number;
   selectedFileCount: number;
   successfulFileCount: number;
   parseFailureCount: number;
   resourceExclusionCount: number;
+  resourceSafeguardEnabled: boolean;
+  ignoredFolders: string[];
+  excludedCategories: string[];
   projectGrouping: "single-project" | "direct-subfolders";
 };
 
@@ -110,6 +117,17 @@ function pathParts(relativePath: string): string[] {
   return relativePath.replace(/\\/g, "/").split("/").filter(Boolean);
 }
 
+function repositoryPathParts(result: MethodResult): string[] {
+  const parts = pathParts(result.relativePath);
+  const projectName = result.project.trim().toLowerCase();
+  const projectIndex = projectName
+    ? parts.findIndex((part) => part.toLowerCase() === projectName)
+    : -1;
+  if (projectIndex >= 0) return parts.slice(projectIndex + 1);
+  if (parts.length > 1 && UMBRELLA_FOLDER_NAMES.has(parts[0].toLowerCase())) return parts.slice(1);
+  return parts;
+}
+
 export function resolveProjectGrouping(
   results: MethodResult[],
   requested: ProjectGrouping,
@@ -136,7 +154,7 @@ export function samplingProjectFor(
 }
 
 function isGenerated(result: MethodResult): boolean {
-  const parts = pathParts(result.relativePath).map((part) => part.toLowerCase());
+  const parts = repositoryPathParts(result).map((part) => part.toLowerCase());
   const fileName = parts.at(-1) ?? "";
   return parts.some((part) => GENERATED_PATH_PARTS.has(part)) ||
     fileName.includes(".min.") || fileName.includes(".bundle.") ||
@@ -145,7 +163,7 @@ function isGenerated(result: MethodResult): boolean {
 }
 
 function isExample(result: MethodResult): boolean {
-  return pathParts(result.relativePath).some((part) => EXAMPLE_PATH_PARTS.has(part.toLowerCase()));
+  return repositoryPathParts(result).some((part) => EXAMPLE_PATH_PARTS.has(part.toLowerCase()));
 }
 
 function isEmptyFunction(result: MethodResult): boolean {
@@ -535,6 +553,16 @@ async function datasetFingerprint(results: MethodResult[], context: SamplingBuil
     csvSchemaVersion: CSV_SCHEMA_VERSION,
     detectorVersion: DETECTOR_VERSION,
     parserVersion: context.parserVersion,
+    analysisProfile: context.analysisProfile,
+    discoveredFileCount: context.discoveredFileCount,
+    selectedFileCount: context.selectedFileCount,
+    successfulFileCount: context.successfulFileCount,
+    parseFailureCount: context.parseFailureCount,
+    resourceExclusionCount: context.resourceExclusionCount,
+    resourceSafeguardEnabled: context.resourceSafeguardEnabled,
+    ignoredFolders: context.ignoredFolders,
+    excludedCategories: context.excludedCategories,
+    projectGrouping: context.projectGrouping,
     thresholds: context.thresholds,
     chunkHashes,
   }));
@@ -601,7 +629,7 @@ export async function buildValidationSamplePackage(
     sourceSegment: item.result.source,
     sourceContext: config.includeNearbyContext ? sourceWithNearbyContext(item.result) : item.result.source,
     segmentSha256,
-    protocolVersion: "2.0.0",
+    protocolVersion: SAMPLING_PROTOCOL_VERSION,
   }));
 
   const study = {
@@ -613,7 +641,7 @@ export async function buildValidationSamplePackage(
     detectorVersion: DETECTOR_VERSION,
     blinded: true,
     phase: config.phase,
-    protocolVersion: "2.0.0",
+    protocolVersion: SAMPLING_PROTOCOL_VERSION,
   };
   const masterPayload = { study, samples: blindedSamples };
 
@@ -683,7 +711,7 @@ export async function buildValidationSamplePackage(
 
   const selectedMethods = sampleRecords.map(({ item }) => item.result);
   const report = {
-    protocolVersion: "2.0.0",
+    protocolVersion: SAMPLING_PROTOCOL_VERSION,
     generatedAt: new Date().toISOString(),
     dataset: {
       sha256: datasetSha256,
@@ -691,10 +719,15 @@ export async function buildValidationSamplePackage(
       csvSchemaVersion: CSV_SCHEMA_VERSION,
       detectorVersion: DETECTOR_VERSION,
       parserVersion: context.parserVersion,
+      analysisProfile: context.analysisProfile,
+      filesDiscovered: context.discoveredFileCount,
       filesSelected: context.selectedFileCount,
       filesAnalyzed: context.successfulFileCount,
       parseFailureCount: context.parseFailureCount,
       resourceExclusionCount: context.resourceExclusionCount,
+      resourceSafeguardEnabled: context.resourceSafeguardEnabled,
+      ignoredFolders: context.ignoredFolders,
+      excludedCategories: context.excludedCategories,
       projectGrouping: context.projectGrouping,
     },
     design: {

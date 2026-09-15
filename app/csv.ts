@@ -1,18 +1,23 @@
 import { DEFAULT_THRESHOLDS } from "./analyzer.ts";
 import type { MethodResult, Thresholds } from "./analyzer.ts";
 
-export const CSV_SCHEMA_VERSION = "2.4.0";
-export const DETECTOR_VERSION = "0.6.0";
+export const CSV_SCHEMA_VERSION = "2.5.0";
+export const DETECTOR_VERSION = "0.6.1";
 
 export type ProjectGroupingMode = "single-project" | "direct-subfolders";
 
 export type CsvExportContext = {
   thresholds: Thresholds;
   parserVersion: string;
+  analysisProfile: "authored-source-v1" | "all-selected-source-v1";
+  discoveredFileCount: number;
   selectedFileCount: number;
   successfulFileCount: number;
   parseFailureCount: number;
   resourceExclusionCount: number;
+  resourceSafeguardEnabled: boolean;
+  ignoredFolders: string[];
+  excludedCategories: string[];
   projectGrouping: ProjectGroupingMode;
 };
 
@@ -75,10 +80,15 @@ export const CSV_HEADERS = [
   "CSV_SCHEMA_VERSION",
   "DETECTOR_VERSION",
   "PARSER_VERSION",
+  "ANALYSIS_PROFILE",
+  "FILES_DISCOVERED",
   "FILES_SELECTED",
   "FILES_ANALYZED",
   "PARSE_FAILURE_COUNT",
   "RESOURCE_EXCLUSION_COUNT",
+  "RESOURCE_SAFEGUARD_ENABLED",
+  "IGNORED_FOLDERS",
+  "EXCLUDED_SOURCE_CATEGORIES",
   "PROJECT_GROUPING",
   "LONG_LOC_THRESHOLD",
   "LONG_COMPOUND_ENABLED",
@@ -135,10 +145,15 @@ function defaultContext(results: MethodResult[]): CsvExportContext {
   return {
     thresholds: DEFAULT_THRESHOLDS,
     parserVersion: "Acorn 8+",
+    analysisProfile: "authored-source-v1",
+    discoveredFileCount: new Set(results.map((result) => result.relativePath)).size,
     selectedFileCount: new Set(results.map((result) => result.relativePath)).size,
     successfulFileCount: new Set(results.map((result) => result.relativePath)).size,
     parseFailureCount: 0,
     resourceExclusionCount: 0,
+    resourceSafeguardEnabled: true,
+    ignoredFolders: ["build", "coverage", "dist", "node_modules"],
+    excludedCategories: [],
     projectGrouping: "single-project",
   };
 }
@@ -192,10 +207,15 @@ export function toCsv(results: MethodResult[], context: CsvExportContext = defau
       CSV_SCHEMA_VERSION,
       DETECTOR_VERSION,
       context.parserVersion,
+      context.analysisProfile,
+      context.discoveredFileCount,
       context.selectedFileCount,
       context.successfulFileCount,
       context.parseFailureCount,
       context.resourceExclusionCount,
+      Number(context.resourceSafeguardEnabled),
+      context.ignoredFolders.join("|"),
+      context.excludedCategories.join("|"),
       context.projectGrouping,
       context.thresholds.longLoc,
       Number(context.thresholds.longCompound),

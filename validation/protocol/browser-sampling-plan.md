@@ -1,4 +1,4 @@
-# Browser Validation Sampling Protocol — Version 2.0.0
+# Browser Validation Sampling Protocol — Version 2.0.1
 
 ## Purpose
 
@@ -76,6 +76,11 @@ bundled, external, minified, example, sample, demo, playground, and debug paths
 are excluded by default. Empty bodies and exact duplicate source segments are
 also excluded by default.
 
+Eligibility path rules begin inside the resolved repository boundary. An outer
+collection folder such as `Sample`, or a repository whose own name happens to
+be `generated`, is neutral; only matching path components inside that repository
+trigger the generated/example exclusions.
+
 The minimum LOC default is 1. Do not impose a global three- or five-line cutoff
 without a smell-specific rationale: a short method can still contain a Complex
 Conditional or Feature Envy. Every excluded detector row and its rule ID is
@@ -136,8 +141,10 @@ estimation.
 ## Reproducibility and study conduct
 
 The report stores a SHA-256 tree fingerprint of canonical detector rows,
-detector/schema/parser versions, threshold snapshot, file, parse-failure, and
-resource-exclusion counts, configuration, seed, and selection algorithm. The
+detector/schema/parser versions, the analysis-population profile, active
+folder/category exclusions, threshold snapshot, discovered/selected/analyzed
+file counts, parse-failure and resource-exclusion counts, configuration, seed,
+and selection algorithm. The
 private sampling manifest also retains each selected method's Feature Envy
 inference-partition provenance. Each source segment has
 its own SHA-256. The same detector results, settings, and seed reproduce the

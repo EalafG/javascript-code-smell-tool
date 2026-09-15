@@ -36,6 +36,16 @@ const PRESETS: Array<{ value: SamplingPreset; label: string; detail: string }> =
   { value: "audit", label: "Detector audit", detail: "Controlled predicted-smelly/clean balance for error analysis." },
 ];
 
+const EXCLUSION_LABELS: Record<string, string> = {
+  PROJECT_EXCLUDED: "project selection",
+  CATEGORY_EXCLUDED: "source category",
+  GENERATED_OR_MINIFIED: "generated or minified layout",
+  EXAMPLE_OR_DEMO: "example or demo path",
+  EMPTY_FUNCTION: "empty function",
+  BELOW_MINIMUM_LOC: "minimum LOC",
+  DUPLICATE_SOURCE: "duplicate source",
+};
+
 function projectNames(results: MethodResult[], grouping: ProjectGrouping): string[] {
   const resolved = resolveProjectGrouping(results, grouping);
   return [...new Set(results.map((result) => samplingProjectFor(result, resolved)))].sort();
@@ -118,6 +128,22 @@ export function ValidationSampleBuilder({ results, context, onClose }: Props) {
     () => previewSamplingPopulation(results, config),
     [config, results],
   );
+
+  const eligibilityIssue = useMemo(() => {
+    if (config.includedProjects.length === 0) return "Select at least one project in Coverage.";
+    if (config.sampleSize <= 0) return "Enter a sample size greater than zero.";
+    if (preview.eligibleCount >= config.sampleSize) return "";
+    const exclusions = Object.entries(preview.exclusionCounts)
+      .filter(([, count]) => count > 0)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 3)
+      .map(([ruleId, count]) => `${EXCLUSION_LABELS[ruleId] ?? ruleId.toLowerCase().replaceAll("_", " ")}: ${count.toLocaleString()}`)
+      .join(" · ");
+    const summary = preview.eligibleCount === 0
+      ? "No methods match the current eligibility settings."
+      : `Only ${preview.eligibleCount.toLocaleString()} methods match the requested sample of ${config.sampleSize.toLocaleString()}.`;
+    return exclusions ? `${summary} Main exclusions: ${exclusions}.` : summary;
+  }, [config.includedProjects.length, config.sampleSize, preview.eligibleCount, preview.exclusionCounts]);
 
   function applyPreset(preset: SamplingPreset) {
     setConfig(presetConfig(results, preset));
@@ -391,6 +417,13 @@ export function ValidationSampleBuilder({ results, context, onClose }: Props) {
                   <article><span>Predicted smelly</span><strong>{preview.predictedSmellyCount.toLocaleString()}</strong></article>
                   <article><span>Predicted clean</span><strong>{preview.predictedCleanCount.toLocaleString()}</strong></article>
                 </div>
+
+                {eligibilityIssue && (
+                  <div className="builder-eligibility-warning" role="status">
+                    <strong>Package not ready</strong>
+                    <p>{eligibilityIssue}</p>
+                  </div>
+                )}
 
                 <div className="builder-output-note">
                   <strong>One ZIP, two privacy levels</strong>

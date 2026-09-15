@@ -100,10 +100,15 @@ function config(results: MethodResult[]): ValidationSamplingConfig {
 const context = {
   thresholds: DEFAULT_THRESHOLDS,
   parserVersion: "Acorn 8.15.0",
+  analysisProfile: "authored-source-v1" as const,
+  discoveredFileCount: 16,
   selectedFileCount: 16,
   successfulFileCount: 16,
   parseFailureCount: 0,
   resourceExclusionCount: 0,
+  resourceSafeguardEnabled: true,
+  ignoredFolders: ["build", "coverage", "dist", "node_modules"],
+  excludedCategories: [],
   projectGrouping: "direct-subfolders" as const,
 };
 
@@ -179,6 +184,25 @@ test("preview records deterministic exclusion reasons", () => {
   assert.equal(preview.eligibleCount, 1);
   assert.equal(preview.exclusionCounts.DUPLICATE_SOURCE, 1);
   assert.equal(preview.exclusionCounts.CATEGORY_EXCLUDED, 1);
+});
+
+test("outer collection and repository names do not exclude all production methods", () => {
+  const production = method(1, "atom", {}, "Sample/atom/src/main.js");
+  const example = method(2, "atom", {}, "Sample/atom/examples/demo.js");
+  const atomOptions = config([production, example]);
+  atomOptions.sampleSize = 1;
+  const atomPreview = previewSamplingPopulation([production, example], atomOptions);
+
+  assert.equal(atomPreview.eligibleCount, 1);
+  assert.equal(atomPreview.exclusionCounts.EXAMPLE_OR_DEMO, 1);
+
+  const generatedNamedProject = method(3, "generated", {}, "generated/src/main.js");
+  const generatedOptions = config([generatedNamedProject]);
+  generatedOptions.sampleSize = 1;
+  const generatedPreview = previewSamplingPopulation([generatedNamedProject], generatedOptions);
+
+  assert.equal(generatedPreview.eligibleCount, 1);
+  assert.equal(generatedPreview.exclusionCounts.GENERATED_OR_MINIFIED, undefined);
 });
 
 test("stored ZIP writer emits a valid deterministic ZIP signature", async () => {
