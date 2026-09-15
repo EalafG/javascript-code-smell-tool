@@ -15,7 +15,8 @@ import {
   indexParsedSource,
   parseJavaScriptSource,
 } from "./analyzer";
-import { downloadCsv, downloadParseFailuresCsv } from "./csv";
+import { partitionForInference, resourceRiskFor } from "./analysis-partitions";
+import { downloadAnalysisExclusionsCsv, downloadCsv, downloadParseFailuresCsv } from "./csv";
 import type { ProjectGroupingMode } from "./csv";
 import { useCodeThemePreference } from "./code-theme";
 import { CodeThemeToggle, SyntaxCode } from "./code-viewer";
@@ -44,8 +45,16 @@ type SelectedFile = {
 };
 
 type ParseFailure = {
+  project: string;
   file: string;
   message: string;
+};
+
+type AnalysisExclusion = {
+  project: string;
+  file: string;
+  ruleId: string;
+  reason: string;
 };
 
 const SUPPORTED_EXTENSION = /\.(js|mjs|cjs|jsx)$/i;
@@ -159,6 +168,8 @@ export default function Home() {
   const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
   const [rawResults, setRawResults] = useState<MethodResult[]>([]);
   const [parseFailures, setParseFailures] = useState<ParseFailure[]>([]);
+  const [analysisExclusions, setAnalysisExclusions] = useState<AnalysisExclusion[]>([]);
+  const [resourceSafeguard, setResourceSafeguard] = useState(true);
   const [filesAnalyzed, setFilesAnalyzed] = useState(0);
   const [filesSubmitted, setFilesSubmitted] = useState(0);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -236,8 +247,9 @@ export default function Home() {
     selectedFileCount: filesSubmitted,
     successfulFileCount: filesAnalyzed,
     parseFailureCount: parseFailures.length,
+    resourceExclusionCount: analysisExclusions.length,
     projectGrouping: projectOrganization,
-  }), [thresholds, parserVersion, filesSubmitted, filesAnalyzed, parseFailures.length, projectOrganization]);
+  }), [thresholds, parserVersion, filesSubmitted, filesAnalyzed, parseFailures.length, analysisExclusions.length, projectOrganization]);
 
   const stats = useMemo(() => {
     let smelly = 0;
@@ -321,11 +333,13 @@ export default function Home() {
       fileName: string;
       relativePath: string;
       project: string;
+      size: number;
       read: () => Promise<string>;
     }> = activeFiles.map(({ file, relativePath }) => ({
       fileName: file.name,
       relativePath,
       project: analysisProjectFor(relativePath, fallbackProject, projectOrganization),
+      size: file.size,
       read: () => file.text(),
     }));
     if (snippet.trim()) {
@@ -333,6 +347,7 @@ export default function Home() {
         fileName: "pasted-snippet.js",
         relativePath: "pasted-snippet.js",
         project: fallbackProject,
+        size: new Blob([snippet]).size,
         read: async () => snippet,
       });
     }
@@ -348,12 +363,14 @@ export default function Home() {
     setInputMessage("");
     setRawResults([]);
     setParseFailures([]);
+    setAnalysisExclusions([]);
     setFilesAnalyzed(0);
     setParserStatus("ready");
     setFilesSubmitted(sourceEntries.length);
     setProgress({ current: 0, total: sourceEntries.length * 2, stage: "Preparing project groups" });
 
     const failures: ParseFailure[] = [];
+    const resourceExclusions: AnalysisExclusion[] = [];
     const collected: MethodResult[] = [];
     let successfulFiles = 0;
     let completedWork = 0;
@@ -366,6 +383,11 @@ export default function Home() {
       groupedEntries.set(entry.project, group);
     }
     const projectGroups = [...groupedEntries.entries()].sort(([a], [b]) => a.localeCompare(b));
+    const projectPlans = projectGroups.map(([project, entries]) => ({
+      project,
+      partitions: partitionForInference(entries),
+    }));
+    const totalPartitions = projectPlans.reduce((sum, plan) => sum + plan.partitions.length, 0);
     await yieldToBrowser();
 
     async function updateProgress(stage: string, force = false) {
@@ -378,81 +400,105 @@ export default function Home() {
     }
 
     try {
-      for (let projectIndex = 0; projectIndex < projectGroups.length; projectIndex += 1) {
+      let partitionOrdinal = 0;
+      projectLoop: for (let projectIndex = 0; projectIndex < projectPlans.length; projectIndex += 1) {
         if (cancelAnalysisRef.current) break;
-        const [analysisProject, projectEntries] = projectGroups[projectIndex];
-        const projectLabel = `${analysisProject} · project ${projectIndex + 1}/${projectGroups.length}`;
-        const inferenceModel = createProjectAnalysisModel(`P-${String(projectIndex + 1).padStart(4, "0")}`);
-        const indexedEntries: typeof sourceEntries = [];
+        const { project: analysisProject, partitions } = projectPlans[projectIndex];
+        for (let partitionIndex = 0; partitionIndex < partitions.length; partitionIndex += 1) {
+          partitionOrdinal += 1;
+          const partitionEntries = partitions[partitionIndex];
+          const projectLabel = `${analysisProject} · project ${projectIndex + 1}/${projectPlans.length} · partition ${partitionIndex + 1}/${partitions.length}`;
+          const inferenceModel = createProjectAnalysisModel(
+            `P-${String(projectIndex + 1).padStart(4, "0")}-B-${String(partitionIndex + 1).padStart(4, "0")}`,
+          );
+          const indexedEntries: typeof sourceEntries = [];
 
-        for (const entry of projectEntries) {
-          if (cancelAnalysisRef.current) break;
+          for (const entry of partitionEntries) {
+            if (cancelAnalysisRef.current) break;
+            const pathRisk = resourceSafeguard ? resourceRiskFor(entry.relativePath, entry.size) : null;
+            if (pathRisk) {
+              resourceExclusions.push({ project: analysisProject, file: entry.relativePath, ...pathRisk });
+              completedWork += 2;
+              await updateProgress(`Excluding resource-risk source in ${projectLabel}`);
+              continue;
+            }
+            try {
+              const source = await entry.read();
+              const layoutRisk = resourceSafeguard ? resourceRiskFor(entry.relativePath, entry.size, source) : null;
+              if (layoutRisk) {
+                resourceExclusions.push({ project: analysisProject, file: entry.relativePath, ...layoutRisk });
+                completedWork += 2;
+                await updateProgress(`Excluding resource-risk source in ${projectLabel}`);
+                continue;
+              }
+              const parsed = parseJavaScriptSource(window.acorn, source, {
+                project: analysisProject,
+                fileName: entry.fileName,
+                relativePath: entry.relativePath,
+              });
+              indexParsedSource(inferenceModel, parsed);
+              indexedEntries.push(entry);
+              completedWork += 1;
+            } catch (error) {
+              failures.push({
+                project: analysisProject,
+                file: entry.relativePath,
+                message: error instanceof Error ? error.message : String(error),
+              });
+              completedWork += 2;
+            }
+            await updateProgress(`Indexing ${projectLabel} · ${partitionOrdinal}/${totalPartitions} total`);
+          }
+
+          if (cancelAnalysisRef.current) {
+            disposeProjectAnalysisModel(inferenceModel);
+            break projectLoop;
+          }
+          if (!indexedEntries.length) {
+            disposeProjectAnalysisModel(inferenceModel);
+            continue;
+          }
+          await updateProgress(`Resolving Feature Envy types for ${projectLabel}`, true);
           try {
-            const source = await entry.read();
-            const parsed = parseJavaScriptSource(window.acorn, source, {
+            finalizeProjectAnalysisModel(inferenceModel);
+          } catch (error) {
+            failures.push({
               project: analysisProject,
-              fileName: entry.fileName,
-              relativePath: entry.relativePath,
+              file: `${analysisProject}/`,
+              message: `Inference partition failed: ${error instanceof Error ? error.message : String(error)}`,
             });
-            indexParsedSource(inferenceModel, parsed);
-            indexedEntries.push(entry);
+            completedWork += indexedEntries.length;
+            disposeProjectAnalysisModel(inferenceModel);
+            await updateProgress(`Skipped ${projectLabel} after an inference failure`, true);
+            continue;
+          }
+
+          for (const entry of indexedEntries) {
+            if (cancelAnalysisRef.current) break;
+            try {
+              // Reparse one file at a time rather than retaining every partition AST.
+              // This deliberately trades some CPU time for a much lower memory peak.
+              const source = await entry.read();
+              const parsed = parseJavaScriptSource(window.acorn, source, {
+                project: analysisProject,
+                fileName: entry.fileName,
+                relativePath: entry.relativePath,
+              });
+              for (const result of analyzeParsedSource(parsed, thresholds, inferenceModel)) collected.push(result);
+              successfulFiles += 1;
+            } catch (error) {
+              failures.push({
+                project: analysisProject,
+                file: entry.relativePath,
+                message: error instanceof Error ? error.message : String(error),
+              });
+            }
             completedWork += 1;
-          } catch (error) {
-            failures.push({
-              file: entry.relativePath,
-              message: error instanceof Error ? error.message : String(error),
-            });
-            completedWork += 2;
+            await updateProgress(`Measuring methods in ${projectLabel} · ${partitionOrdinal}/${totalPartitions} total`);
           }
-          await updateProgress(`Indexing ${projectLabel}`);
-        }
-
-        if (cancelAnalysisRef.current) {
           disposeProjectAnalysisModel(inferenceModel);
-          break;
+          await updateProgress(`Released memory for ${projectLabel}`, true);
         }
-        if (!indexedEntries.length) {
-          disposeProjectAnalysisModel(inferenceModel);
-          continue;
-        }
-        await updateProgress(`Resolving Feature Envy types for ${projectLabel}`, true);
-        try {
-          finalizeProjectAnalysisModel(inferenceModel);
-        } catch (error) {
-          failures.push({
-            file: `${analysisProject}/`,
-            message: `Project inference failed: ${error instanceof Error ? error.message : String(error)}`,
-          });
-          completedWork += indexedEntries.length;
-          disposeProjectAnalysisModel(inferenceModel);
-          await updateProgress(`Skipped ${projectLabel} after an inference failure`, true);
-          continue;
-        }
-
-        for (const entry of indexedEntries) {
-          if (cancelAnalysisRef.current) break;
-          try {
-            // Reparse one file at a time rather than retaining every project AST.
-            // This deliberately trades some CPU time for a much lower memory peak.
-            const source = await entry.read();
-            const parsed = parseJavaScriptSource(window.acorn, source, {
-              project: analysisProject,
-              fileName: entry.fileName,
-              relativePath: entry.relativePath,
-            });
-            for (const result of analyzeParsedSource(parsed, thresholds, inferenceModel)) collected.push(result);
-            successfulFiles += 1;
-          } catch (error) {
-            failures.push({
-              file: entry.relativePath,
-              message: error instanceof Error ? error.message : String(error),
-            });
-          }
-          completedWork += 1;
-          await updateProgress(`Measuring methods in ${projectLabel}`);
-        }
-        disposeProjectAnalysisModel(inferenceModel);
-        await updateProgress(`Released analysis memory for ${projectLabel}`, true);
       }
 
       if (cancelAnalysisRef.current) {
@@ -465,13 +511,13 @@ export default function Home() {
       setRawResults(finalizeMethodResultsInPlace(collected));
       setFilesAnalyzed(successfulFiles);
       setParseFailures(failures);
+      setAnalysisExclusions(resourceExclusions);
       setParserStatus(failures.length ? "parse-error" : "ready");
       setActiveTab("dataset");
-      if (projectGroups.length > 1) {
-        setInputMessage(`${projectGroups.length} projects were analyzed independently to limit memory use and preserve project-level Feature Envy inference.`);
-      }
+      setInputMessage(`${projectPlans.length} project${projectPlans.length === 1 ? " was" : "s were"} analyzed in ${totalPartitions} deterministic memory partition${totalPartitions === 1 ? "" : "s"}. ${resourceExclusions.length} resource-risk file${resourceExclusions.length === 1 ? " was" : "s were"} excluded and logged.`);
     } catch (error) {
       setParseFailures(failures);
+      setAnalysisExclusions(resourceExclusions);
       setInputMessage(`Analysis stopped safely: ${error instanceof Error ? error.message : String(error)}. Try excluding generated code or enabling multi-project mode for a repository collection.`);
     } finally {
       cancelAnalysisRef.current = false;
@@ -492,7 +538,7 @@ export default function Home() {
   }[parserStatus];
 
   const overviewCards = [
-    ["Files analyzed", filesAnalyzed, parseFailures.length ? `${parseFailures.length} parse failure${parseFailures.length === 1 ? "" : "s"} isolated` : filesSubmitted ? "All submitted files parsed" : "Awaiting analysis"],
+    ["Files analyzed", filesAnalyzed, parseFailures.length || analysisExclusions.length ? `${parseFailures.length} parse failure${parseFailures.length === 1 ? "" : "s"} · ${analysisExclusions.length} resource exclusion${analysisExclusions.length === 1 ? "" : "s"}` : filesSubmitted ? "All submitted files parsed" : "Awaiting analysis"],
     ["Methods analyzed", stats.methods, filesAnalyzed ? `${(stats.methods / filesAnalyzed).toFixed(1)} methods per parsed file` : "Method-level dataset rows"],
     ["Clean", stats.clean, stats.methods ? `${((stats.clean / stats.methods) * 100).toFixed(1)}% of methods` : "0.0% of methods"],
     ["Smelly", stats.smelly, stats.methods ? `${((stats.smelly / stats.methods) * 100).toFixed(1)}% of methods` : "0.0% of methods"],
@@ -676,6 +722,15 @@ export default function Home() {
                 </label>
                 <small>{analysisProjectCount || 0} project group{analysisProjectCount === 1 ? "" : "s"} detected · analyzed sequentially to reduce memory</small>
               </fieldset>
+
+              <fieldset className="ignore-options project-mode-options">
+                <legend>Browser memory safeguard</legend>
+                <label>
+                  <input type="checkbox" checked={resourceSafeguard} onChange={(event) => setResourceSafeguard(event.target.checked)} />
+                  <span>Exclude oversized, minified-layout, and bundled files</span>
+                </label>
+                <small>Recommended · every excluded file and rule is exported for auditability</small>
+              </fieldset>
             </div>
           </details>
 
@@ -752,10 +807,10 @@ export default function Home() {
               <h3>Feature Envy</h3>
               <p className="formula">ATFD &gt; FEW ∧ LAA &lt; ⅓ ∧ FDP ≤ FEW</p>
               <ThresholdInput label="FEW" value={thresholds.few} onChange={(few) => setThresholds((value) => ({ ...value, few }))} />
-              <p className="rule-note">Project-wide, type-aware data locality.</p>
+              <p className="rule-note">Type-aware data locality in bounded project partitions.</p>
               <details className="methodology-details">
                 <summary>Inference methodology</summary>
-                <p>Paper-inspired static object-type inference uses one project-wide model. ATD/ATFD use distinct type-property tuples; member calls are included, array indices become <code>IDX</code>, and nested functions remain independent.</p>
+                <p>Paper-inspired static object-type inference uses deterministic project partitions of at most 100 files or 512 KiB of source. ATD/ATFD use distinct type-property tuples; member calls are included, array indices become <code>IDX</code>, and nested functions remain independent.</p>
                 <p>Coverage, unresolved accesses, exact local-access counts, and inference provenance are exported. This is an approximation—not the paper&apos;s full JIPDA abstract interpreter.</p>
               </details>
             </article>
@@ -811,6 +866,21 @@ export default function Home() {
               </ul>
             </details>
           )}
+
+          {analysisExclusions.length > 0 && (
+            <details className="parse-failures">
+              <summary>{analysisExclusions.length} resource-risk source file{analysisExclusions.length === 1 ? " was" : "s were"} excluded</summary>
+              <p>These files were omitted to keep browser memory bounded. Each path, rule, and reason is retained in the analysis-exclusion CSV.</p>
+              <ul>
+                {analysisExclusions.slice(0, 100).map((exclusion) => (
+                  <li key={`${exclusion.file}-${exclusion.ruleId}`}><strong>{exclusion.file}</strong><span>{exclusion.ruleId} · {exclusion.reason}</span></li>
+                ))}
+                {analysisExclusions.length > 100 && (
+                  <li><strong>Additional exclusions</strong><span>{(analysisExclusions.length - 100).toLocaleString()} more are available in the analysis-exclusion CSV export.</span></li>
+                )}
+              </ul>
+            </details>
+          )}
         </section>
 
         <section className="panel results-panel" aria-labelledby="results-heading">
@@ -830,6 +900,15 @@ export default function Home() {
                   "javascript-code-smell-parse-failures.csv",
                   projectOrganization,
                 )}>Export parse failures</button>
+              )}
+              {analysisExclusions.length > 0 && (
+                <button className="secondary-button" type="button" onClick={() => downloadAnalysisExclusionsCsv(
+                  projectName.trim() || "javascript-project",
+                  analysisExclusions,
+                  parserVersion || "Acorn 8+",
+                  "javascript-code-smell-analysis-exclusions.csv",
+                  projectOrganization,
+                )}>Export analysis exclusions</button>
               )}
               <button className="secondary-button" type="button" disabled={!results.length} onClick={() => downloadCsv(results, "javascript-code-smell-dataset.csv", exportContext)}>Export all CSV</button>
               <button className="primary-button" type="button" disabled={!filteredResults.length} onClick={() => downloadCsv(filteredResults, "javascript-code-smell-dataset-filtered.csv", exportContext)}>Export filtered CSV</button>

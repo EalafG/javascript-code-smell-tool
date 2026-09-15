@@ -6,6 +6,7 @@ import {
   indexFeatureEnvySource,
 } from "./feature-envy.ts";
 import type { FeatureEnvyModel } from "./feature-envy.ts";
+import { partitionForInference } from "./analysis-partitions.ts";
 
 export type Thresholds = {
   longLoc: number;
@@ -104,6 +105,7 @@ export type MethodResult = {
   feBatchId: string;
   feBatchFileCount: number;
   feBatchSizeLimit: number;
+  feBatchByteLimit: number;
   feScope: string;
   feIndexedFileCount: number;
   foreignMemberCalls: number;
@@ -639,11 +641,19 @@ export function analyzeProjectSources(
   thresholds: Thresholds,
 ): MethodResult[] {
   const sortedEntries = [...entries].sort((a, b) => a.descriptor.relativePath.localeCompare(b.descriptor.relativePath));
-  const parsedSources = sortedEntries.map((entry) => parseJavaScriptSource(parser, entry.source, entry.descriptor));
-  const model = createProjectAnalysisModel("P-0001");
-  for (const parsed of parsedSources) indexParsedSource(model, parsed);
-  finalizeProjectAnalysisModel(model);
-  return parsedSources.flatMap((parsed) => analyzeParsedSource(parsed, thresholds, model));
+  const sizedEntries = sortedEntries.map((entry) => ({
+    ...entry,
+    size: new TextEncoder().encode(entry.source).byteLength,
+  }));
+  return partitionForInference(sizedEntries).flatMap((partition, index) => {
+    const parsedSources = partition.map((entry) => parseJavaScriptSource(parser, entry.source, entry.descriptor));
+    const model = createProjectAnalysisModel(`P-0001-B-${String(index + 1).padStart(4, "0")}`);
+    for (const parsed of parsedSources) indexParsedSource(model, parsed);
+    finalizeProjectAnalysisModel(model);
+    const results = parsedSources.flatMap((parsed) => analyzeParsedSource(parsed, thresholds, model));
+    disposeProjectAnalysisModel(model);
+    return results;
+  });
 }
 
 export function assignDeterministicIds(results: MethodResult[]): MethodResult[] {

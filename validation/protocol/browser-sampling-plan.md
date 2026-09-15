@@ -136,8 +136,10 @@ estimation.
 ## Reproducibility and study conduct
 
 The report stores a SHA-256 tree fingerprint of canonical detector rows,
-detector/schema/parser versions, threshold snapshot, file and parse-failure
-counts, configuration, seed, and selection algorithm. Each source segment has
+detector/schema/parser versions, threshold snapshot, file, parse-failure, and
+resource-exclusion counts, configuration, seed, and selection algorithm. The
+private sampling manifest also retains each selected method's Feature Envy
+inference-partition provenance. Each source segment has
 its own SHA-256. The same detector results, settings, and seed reproduce the
 same selected records, assignments, and presentation order.
 

@@ -103,6 +103,7 @@ const context = {
   selectedFileCount: 16,
   successfulFileCount: 16,
   parseFailureCount: 0,
+  resourceExclusionCount: 0,
   projectGrouping: "direct-subfolders" as const,
 };
 
@@ -127,6 +128,10 @@ test("builds a deterministic blinded sample and keeps private detector evidence 
   assert.equal(first.datasetSha256, second.datasetSha256);
   assert.equal(artifact("validation-sample.blinded.json"), artifact("validation-sample.blinded.json", second));
   assert.equal(artifact("private/sampling-manifest.csv"), artifact("private/sampling-manifest.csv", second));
+  const manifestLines = artifact("private/sampling-manifest.csv")?.trimEnd().split("\r\n") ?? [];
+  assert.ok(manifestLines.length > 1);
+  assert.equal(manifestLines[0].split(",").length, manifestLines[1].split(",").length);
+  assert.match(manifestLines[0], /FE_BATCH_BYTE_LIMIT/);
 
   const payload = JSON.parse(artifact("validation-sample.blinded.json") ?? "{}") as {
     samples: Array<Record<string, unknown>>;

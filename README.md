@@ -36,7 +36,9 @@ The production build uses relative asset URLs so the local Acorn parser and UPM 
 
 The interface accepts individual `.js`, `.mjs`, `.cjs`, and `.jsx` files, a complete folder with preserved relative paths, or a pasted JavaScript snippet. Folder rules can skip `node_modules`, `dist`, `build`, and `coverage`. Optional category rules can exclude tests/specs, fixtures, vendor code, benchmarks, and maintenance scripts. Every included method is assigned a reproducible `CODE_CATEGORY` value.
 
-For a folder that contains multiple repository subfolders, enable **Each direct subfolder is a separate project** under Analysis and exclusion options. Recognized umbrella folders such as `Sample`, `projects`, and `repositories` enable this automatically. The detector then processes one project at a time, performs project-local Feature Envy inference, reparses only one source file at a time during metric extraction, and explicitly releases each completed inference model. This reduces peak browser memory while keeping cross-file inference within each real project. Analysis can also be cancelled safely between files.
+For a folder that contains multiple repository subfolders, enable **Each direct subfolder is a separate project** under Analysis and exclusion options. Recognized umbrella folders such as `Sample`, `projects`, and `repositories` enable this automatically. Each project is divided deterministically into inference partitions of at most 100 sorted files or 512 KiB of source. The detector reparses only one file at a time during metric extraction and explicitly releases each completed partition model. This bounds peak browser memory while retaining cross-file inference within each partition. Analysis can also be cancelled safely between files.
+
+The recommended browser-memory safeguard excludes files larger than 1 MiB, filenames that explicitly identify minified/bundled output, and sources containing a physical line longer than 5,000 characters. These inputs are commonly generated artifacts and can exhaust a browser tab before method analysis completes. No exclusion is silent: the interface lists it, the dataset repeats `RESOURCE_EXCLUSION_COUNT`, and **Export analysis exclusions** produces a deterministic manifest containing each file, rule ID, and reason. Disable the safeguard only when deliberately studying such artifacts and sufficient browser memory is available.
 
 ## Validation sample builder
 
@@ -80,12 +82,12 @@ The exported metrics are:
 - `COUPLING_TUPLES`: sorted, explicit `L:type#property` and `F:type#property` tuples used to reproduce ATD, ATFD, LAA, and FDP
 - `TYPE_INFERENCE_COVERAGE`: resolved coupling tuples divided by all coupling tuples; `1.0` when there are no accesses
 - `UNKNOWN_ACCESS_COUNT`: number of distinct foreign tuples whose base type could not be resolved
-- `FE_INFERENCE_MODE`: versioned inference provenance (`project-static-object-type-inference-v2`)
+- `FE_INFERENCE_MODE`: versioned inference provenance (`partitioned-project-static-object-type-inference-v3`)
 - `FE_MAX_ITERATIONS`: deterministic fixed-point iteration bound (`12`)
 - `FE_TYPE_SET_LIMIT`: maximum concrete types retained in one inferred type set before adding `unknown:widened` (`12`)
-- `FE_SCOPE`: inference scope (`project`)
-- `FE_INDEXED_FILE_COUNT`: all successfully parsed project files indexed by the inference model
-- `FE_BATCH_ID`, `FE_BATCH_FILE_COUNT`, and `FE_BATCH_SIZE_LIMIT`: inference provenance columns; project groups receive deterministic `P-0001`, `P-0002`, … identifiers, the project file count, and `0` (unbounded within that project)
+- `FE_SCOPE`: inference scope (`project-partition`)
+- `FE_INDEXED_FILE_COUNT`: successfully parsed files indexed in the method's inference partition
+- `FE_BATCH_ID`, `FE_BATCH_FILE_COUNT`, `FE_BATCH_SIZE_LIMIT`, and `FE_BATCH_BYTE_LIMIT`: deterministic partition identifier, actual indexed file count, 100-file limit, and 524,288-byte (512 KiB) source-size limit
 - `FOREIGN_MEMBER_CALLS`: occurrence count of direct foreign member calls; calls also contribute their distinct property tuple to ATD/ATFD
 - `FOREIGN_CALL_PROVIDERS`: sorted inferred foreign provider types used by direct member calls
 
@@ -104,7 +106,7 @@ Defaults are visible and editable in the interface:
 
 Feature Envy follows the ATFD/LAA/FDP rule used in *Determining Dynamic Coupling in JavaScript Using Object Type Inference* (Nicolay et al., SCAM 2013), adapted to deterministic in-browser static analysis:
 
-- Files are sorted by relative path and indexed into one deterministic project-wide inference model. Object types are inferred across successfully parsed files from allocation sites, object and array literals, constructor calls, ES classes, constructor/prototype assignments, imports/`require`, aliases, property assignments, return values, and resolvable call-site argument flow.
+- Files are sorted by project and relative path, then assigned to deterministic partitions capped at 100 files or 512 KiB. Object types are inferred across successfully parsed files within a partition from allocation sites, object and array literals, constructor calls, ES classes, constructor/prototype assignments, imports/`require`, aliases, property assignments, return values, and resolvable call-site argument flow.
 - Class `extends` and `Object.create(Parent.prototype)` relationships build prototype hierarchies.
 - An access is local when its inferred base type belongs to the active `this` hierarchy. Syntactic `this`/`super` accesses remain local. This means an access such as `other.x` can be local when `other` is inferred as the same type as `this`.
 - ATD and ATFD count **distinct** `(inferred type, property, locality)` coupling tuples, not repeated AST occurrences. FDP counts distinct foreign inferred types, not variable names.
@@ -114,17 +116,17 @@ Feature Envy follows the ATFD/LAA/FDP rule used in *Determining Dynamic Coupling
 - Nested functions are analyzed independently and never add Feature Envy tuples to their parent.
 - The fixed-point solve is bounded to 12 iterations. Each inferred type set retains up to 12 deterministic concrete types and then adds `unknown:widened`; widened tuples lower `TYPE_INFERENCE_COVERAGE` and contribute to `UNKNOWN_ACCESS_COUNT`.
 
-The paper uses JIPDA abstract interpretation and runtime-address abstractions. That full interpreter is not suitable for the modern, large, JSX-capable corpus handled by this browser tool, and the paper itself reports limitations on real-world programs. This application therefore labels its method as `project-static-object-type-inference-v2`, exports project provenance, inference coverage, unresolved counts, and every coupling tuple for expert validation. It must be described in research outputs as a **paper-inspired project-wide static object-type-inference approximation**, not as a reproduction of JIPDA.
+The paper uses JIPDA abstract interpretation and runtime-address abstractions. That full interpreter is not suitable for the modern, large, JSX-capable corpus handled by this browser tool, and the paper itself reports limitations on real-world programs. This application therefore labels its method as `partitioned-project-static-object-type-inference-v3`, exports partition provenance, inference coverage, unresolved counts, and every coupling tuple for expert validation. It must be described in research outputs as a **paper-inspired, partition-bounded static object-type-inference approximation**, not as a reproduction of JIPDA or unbounded whole-project inference.
 
 ## CSV schema
 
 CSV exports use one row per method and a fixed column order:
 
 ```text
-ID,PROJECT,FILE,CODE_CATEGORY,FUNCTION,FUNCTION_TYPE,START_LINE,END_LINE,LOC,SPAN_LOC,COMMENT_LINES,BLANK_LINES,DELIMITER_LINES,CYCLO,MAXNESTING,NOP,NOLV,CONDOPS_MAX,LOGICAL_OPS_MAX,COND_NESTING,NUM_CONDITIONS,ATD,ATFD,LOCAL_ACCESS_COUNT,LAA,LAA_EXACT,FDP,FOREIGN_PROVIDERS,COUPLING_TUPLES,TYPE_INFERENCE_COVERAGE,UNKNOWN_ACCESS_COUNT,FE_INFERENCE_MODE,FE_MAX_ITERATIONS,FE_TYPE_SET_LIMIT,FE_BATCH_ID,FE_BATCH_FILE_COUNT,FE_BATCH_SIZE_LIMIT,FE_SCOPE,FE_INDEXED_FILE_COUNT,FOREIGN_MEMBER_CALLS,FOREIGN_CALL_PROVIDERS,CSV_SCHEMA_VERSION,DETECTOR_VERSION,PARSER_VERSION,FILES_SELECTED,FILES_ANALYZED,PARSE_FAILURE_COUNT,PROJECT_GROUPING,LONG_LOC_THRESHOLD,LONG_COMPOUND_ENABLED,LONG_CYCLO_THRESHOLD,LONG_NESTING_THRESHOLD,COMPLEX_CYCLO_THRESHOLD,CONDITIONAL_OPS_THRESHOLD,CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED,FEW_THRESHOLD,is_long_method,is_complex_method,is_complex_conditional,is_complex_conditional_sonar,is_feature_envy,is_smelly,SMELL_COUNT,SMELL_TYPES
+ID,PROJECT,FILE,CODE_CATEGORY,FUNCTION,FUNCTION_TYPE,START_LINE,END_LINE,LOC,SPAN_LOC,COMMENT_LINES,BLANK_LINES,DELIMITER_LINES,CYCLO,MAXNESTING,NOP,NOLV,CONDOPS_MAX,LOGICAL_OPS_MAX,COND_NESTING,NUM_CONDITIONS,ATD,ATFD,LOCAL_ACCESS_COUNT,LAA,LAA_EXACT,FDP,FOREIGN_PROVIDERS,COUPLING_TUPLES,TYPE_INFERENCE_COVERAGE,UNKNOWN_ACCESS_COUNT,FE_INFERENCE_MODE,FE_MAX_ITERATIONS,FE_TYPE_SET_LIMIT,FE_BATCH_ID,FE_BATCH_FILE_COUNT,FE_BATCH_SIZE_LIMIT,FE_BATCH_BYTE_LIMIT,FE_SCOPE,FE_INDEXED_FILE_COUNT,FOREIGN_MEMBER_CALLS,FOREIGN_CALL_PROVIDERS,CSV_SCHEMA_VERSION,DETECTOR_VERSION,PARSER_VERSION,FILES_SELECTED,FILES_ANALYZED,PARSE_FAILURE_COUNT,RESOURCE_EXCLUSION_COUNT,PROJECT_GROUPING,LONG_LOC_THRESHOLD,LONG_COMPOUND_ENABLED,LONG_CYCLO_THRESHOLD,LONG_NESTING_THRESHOLD,COMPLEX_CYCLO_THRESHOLD,CONDITIONAL_OPS_THRESHOLD,CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED,FEW_THRESHOLD,is_long_method,is_complex_method,is_complex_conditional,is_complex_conditional_sonar,is_feature_envy,is_smelly,SMELL_COUNT,SMELL_TYPES
 ```
 
-Schema `2.3.0` uses detector `0.5.0`. Binary labels use `0` and `1`. Multi-valued providers and smell types use `|`. Values containing commas, quotes, or line breaks are escaped according to CSV conventions. Each dataset row repeats the schema version, detector version, parser version, file counts, parse-failure count, project-grouping mode, and active thresholds so the labels can be reproduced independently. Parsing failures can also be exported as a separate deterministic CSV manifest.
+Schema `2.4.0` uses detector `0.6.0`. Binary labels use `0` and `1`. Multi-valued providers and smell types use `|`. Values containing commas, quotes, or line breaks are escaped according to CSV conventions. Each dataset row repeats the schema version, detector version, parser version, file counts, parse-failure count, resource-exclusion count, project-grouping mode, inference-partition provenance, and active thresholds so the labels can be reproduced independently. Parsing failures and resource-safeguard exclusions can also be exported as separate deterministic CSV manifests.
 
 ## Reliability checks
 

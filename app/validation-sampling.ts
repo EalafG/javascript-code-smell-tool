@@ -48,6 +48,7 @@ export type SamplingBuildContext = {
   selectedFileCount: number;
   successfulFileCount: number;
   parseFailureCount: number;
+  resourceExclusionCount: number;
   projectGrouping: "single-project" | "direct-subfolders";
 };
 
@@ -623,6 +624,8 @@ export async function buildValidationSamplePackage(
     "is_complex_method", "is_complex_conditional", "is_feature_envy", "is_smelly", "SMELL_COUNT",
     "SMELL_TYPES", "SAMPLE_ROLE", "SAMPLING_STRATUM", "STRATUM_POOL_N_PROJECT",
     "STRATUM_SELECTED_N_PROJECT", "CONDITIONAL_INCLUSION_PROBABILITY", "SAMPLING_SEED",
+    "FE_INFERENCE_MODE", "FE_BATCH_ID", "FE_BATCH_FILE_COUNT", "FE_BATCH_SIZE_LIMIT",
+    "FE_BATCH_BYTE_LIMIT", "FE_SCOPE", "TYPE_INFERENCE_COVERAGE", "UNKNOWN_ACCESS_COUNT",
     "DATASET_SHA256", "SEGMENT_SHA256", "CSV_SCHEMA_VERSION", "DETECTOR_VERSION", "PARSER_VERSION",
   ];
   const manifestRows = sampleRecords.map(({ item, sampleId, segmentSha256 }) => {
@@ -638,8 +641,11 @@ export async function buildValidationSamplePackage(
       Number(item.result.isComplexMethod), Number(item.result.isComplexConditional),
       Number(item.result.isFeatureEnvy), Number(item.result.isSmelly), item.result.smellCount,
       item.result.smellTypes.join("|"), item.role, `${item.role}|${item.samplingProject}`,
-      item.poolProjectN, roleProjectSelected, probability.toFixed(10), config.seed, datasetSha256,
-      segmentSha256, CSV_SCHEMA_VERSION, DETECTOR_VERSION, context.parserVersion,
+      item.poolProjectN, roleProjectSelected, probability.toFixed(10), config.seed,
+      item.result.feInferenceMode, item.result.feBatchId, item.result.feBatchFileCount,
+      item.result.feBatchSizeLimit, item.result.feBatchByteLimit, item.result.feScope,
+      item.result.typeInferenceCoverage.toFixed(4), item.result.unknownAccessCount,
+      datasetSha256, segmentSha256, CSV_SCHEMA_VERSION, DETECTOR_VERSION, context.parserVersion,
     ];
   });
 
@@ -688,6 +694,7 @@ export async function buildValidationSamplePackage(
       filesSelected: context.selectedFileCount,
       filesAnalyzed: context.successfulFileCount,
       parseFailureCount: context.parseFailureCount,
+      resourceExclusionCount: context.resourceExclusionCount,
       projectGrouping: context.projectGrouping,
     },
     design: {

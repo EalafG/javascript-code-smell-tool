@@ -19,7 +19,20 @@ import {
   parseJavaScriptSource,
 } from "../app/analyzer.ts";
 import type { MethodResult, Thresholds } from "../app/analyzer.ts";
-import { CSV_HEADERS, PARSE_FAILURE_HEADERS, toCsv, toParseFailuresCsv } from "../app/csv.ts";
+import {
+  ANALYSIS_EXCLUSION_HEADERS,
+  CSV_HEADERS,
+  PARSE_FAILURE_HEADERS,
+  toAnalysisExclusionsCsv,
+  toCsv,
+  toParseFailuresCsv,
+} from "../app/csv.ts";
+import {
+  INFERENCE_PARTITION_BYTE_LIMIT,
+  INFERENCE_PARTITION_FILE_LIMIT,
+  partitionForInference,
+  resourceRiskFor,
+} from "../app/analysis-partitions.ts";
 
 const JsxParser = Parser.extend(jsx());
 const parser = {
@@ -324,13 +337,14 @@ test("reports uncertainty separately from the smell metrics", () => {
   const [unknown] = analyze("function read(customer) { return customer.name; }");
   assert.equal(unknown.unknownAccessCount, 1);
   assert.equal(unknown.typeInferenceCoverage, 0);
-  assert.equal(unknown.feInferenceMode, "project-static-object-type-inference-v2");
+  assert.equal(unknown.feInferenceMode, "partitioned-project-static-object-type-inference-v3");
   assert.equal(unknown.feMaxIterations, 12);
   assert.equal(unknown.feTypeSetLimit, 12);
   assert.equal(unknown.feBatchId, "P-0001");
   assert.equal(unknown.feBatchFileCount, 1);
-  assert.equal(unknown.feBatchSizeLimit, 0);
-  assert.equal(unknown.feScope, "project");
+  assert.equal(unknown.feBatchSizeLimit, 100);
+  assert.equal(unknown.feBatchByteLimit, 512 * 1024);
+  assert.equal(unknown.feScope, "project-partition");
   assert.equal(unknown.feIndexedFileCount, 1);
 
   const projectResults = analyzeProjectSources(parser, [{
@@ -343,7 +357,7 @@ test("reports uncertainty separately from the smell metrics", () => {
   assert.equal(resolved.typeInferenceCoverage, 1);
 });
 
-test("sorts files into one deterministic project-wide inference model", () => {
+test("sorts files into deterministic bounded project partitions", () => {
   const entries = Array.from({ length: 201 }, (_, index) => {
     const ordinal = String(index + 1).padStart(3, "0");
     return {
@@ -360,12 +374,12 @@ test("sorts files into one deterministic project-wide inference model", () => {
   const last = results.find((result) => result.relativePath === "src/file-201.js");
   assert.ok(first);
   assert.ok(last);
-  assert.equal(first.feBatchId, "P-0001");
-  assert.equal(first.feBatchFileCount, 201);
-  assert.equal(last.feBatchId, "P-0001");
-  assert.equal(last.feBatchFileCount, 201);
-  assert.equal(first.feScope, "project");
-  assert.equal(last.feIndexedFileCount, 201);
+  assert.equal(first.feBatchId, "P-0001-B-0001");
+  assert.equal(first.feBatchFileCount, 100);
+  assert.equal(last.feBatchId, "P-0001-B-0003");
+  assert.equal(last.feBatchFileCount, 1);
+  assert.equal(first.feScope, "project-partition");
+  assert.equal(last.feIndexedFileCount, 1);
 });
 
 test("two-pass low-memory analysis preserves metrics and releases project inference state", () => {
@@ -401,6 +415,25 @@ test("two-pass low-memory analysis preserves metrics and releases project infere
   assert.equal(model.sourceScopes.size, 0);
 });
 
+test("inference partitions enforce deterministic file and byte limits", () => {
+  const smallFiles = Array.from({ length: INFERENCE_PARTITION_FILE_LIMIT + 1 }, (_, index) => ({ index, size: 1 }));
+  assert.deepEqual(partitionForInference(smallFiles).map((partition) => partition.length), [100, 1]);
+
+  const byteBound = partitionForInference([
+    { name: "a", size: INFERENCE_PARTITION_BYTE_LIMIT - 10 },
+    { name: "b", size: 20 },
+    { name: "c", size: 30 },
+  ]);
+  assert.deepEqual(byteBound.map((partition) => partition.map((entry) => entry.name)), [["a"], ["b", "c"]]);
+});
+
+test("identifies resource-risk sources with explicit deterministic rules", () => {
+  assert.equal(resourceRiskFor("src/normal.js", 100, "const value = 1;"), null);
+  assert.equal(resourceRiskFor("vendor/library.min.js", 100)?.ruleId, "MINIFIED_OR_BUNDLED_FILE");
+  assert.equal(resourceRiskFor("src/large.js", 1024 * 1024 + 1)?.ruleId, "OVERSIZED_SOURCE_FILE");
+  assert.equal(resourceRiskFor("src/single-line.js", 6000, "x".repeat(5001))?.ruleId, "MINIFIED_LAYOUT");
+});
+
 test("uses exact local-access counts at the one-third Feature Envy boundary", () => {
   const [result] = analyze(`function boundary(customer) {
   void this.first;
@@ -416,6 +449,7 @@ test("uses exact local-access counts at the one-third Feature Envy boundary", ()
   assert.equal(result.isFeatureEnvy, false);
   const csv = toCsv(assignDeterministicIds([result]));
   const values = csv.trimEnd().split("\r\n")[1].split(",");
+  assert.equal(values.length, CSV_HEADERS.length);
   assert.equal(values[CSV_HEADERS.indexOf("LOCAL_ACCESS_COUNT")], "2");
   assert.equal(values[CSV_HEADERS.indexOf("LAA_EXACT")], "2/6");
   assert.equal(values[CSV_HEADERS.indexOf("is_feature_envy")], "0");
@@ -551,11 +585,13 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.ok(CSV_HEADERS.includes("FE_BATCH_ID"));
   assert.ok(CSV_HEADERS.includes("FE_BATCH_FILE_COUNT"));
   assert.ok(CSV_HEADERS.includes("FE_BATCH_SIZE_LIMIT"));
+  assert.ok(CSV_HEADERS.includes("FE_BATCH_BYTE_LIMIT"));
   assert.ok(CSV_HEADERS.includes("FE_SCOPE"));
   assert.ok(CSV_HEADERS.includes("FE_INDEXED_FILE_COUNT"));
   assert.ok(CSV_HEADERS.includes("CSV_SCHEMA_VERSION"));
   assert.ok(CSV_HEADERS.includes("DETECTOR_VERSION"));
   assert.ok(CSV_HEADERS.includes("PARSER_VERSION"));
+  assert.ok(CSV_HEADERS.includes("RESOURCE_EXCLUSION_COUNT"));
   assert.ok(CSV_HEADERS.includes("PROJECT_GROUPING"));
   assert.ok(CSV_HEADERS.includes("LONG_LOC_THRESHOLD"));
   assert.ok(CSV_HEADERS.includes("CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED"));
@@ -574,6 +610,19 @@ test("exports parse failures as a stable escaped CSV", () => {
   assert.ok(PARSE_FAILURE_HEADERS.includes("PROJECT_GROUPING"));
   assert.match(lines[1], /"src\/a,b\.js"/);
   assert.match(lines[1], /"Unexpected ""token"""/);
+});
+
+test("exports resource exclusions as a stable escaped CSV", () => {
+  const csv = toAnalysisExclusionsCsv("Project A", [{
+    file: "vendor/a,b.min.js",
+    ruleId: "MINIFIED_OR_BUNDLED_FILE",
+    reason: 'Generated "bundle"',
+  }], "Acorn 8.15.0", "direct-subfolders");
+  const lines = csv.trimEnd().split("\r\n");
+  assert.equal(lines[0], ANALYSIS_EXCLUSION_HEADERS.join(","));
+  assert.match(lines[1], /"vendor\/a,b\.min\.js"/);
+  assert.match(lines[1], /"Generated ""bundle"""/);
+  assert.match(lines[1], /direct-subfolders/);
 });
 
 test("ships a browser-local Acorn 8 parser with JSX support", async () => {

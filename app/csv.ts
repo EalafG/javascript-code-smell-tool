@@ -1,8 +1,8 @@
 import { DEFAULT_THRESHOLDS } from "./analyzer.ts";
 import type { MethodResult, Thresholds } from "./analyzer.ts";
 
-export const CSV_SCHEMA_VERSION = "2.3.0";
-export const DETECTOR_VERSION = "0.5.0";
+export const CSV_SCHEMA_VERSION = "2.4.0";
+export const DETECTOR_VERSION = "0.6.0";
 
 export type ProjectGroupingMode = "single-project" | "direct-subfolders";
 
@@ -12,12 +12,21 @@ export type CsvExportContext = {
   selectedFileCount: number;
   successfulFileCount: number;
   parseFailureCount: number;
+  resourceExclusionCount: number;
   projectGrouping: ProjectGroupingMode;
 };
 
 export type ParseFailureExport = {
+  project?: string;
   file: string;
   message: string;
+};
+
+export type AnalysisExclusionExport = {
+  project?: string;
+  file: string;
+  ruleId: string;
+  reason: string;
 };
 
 export const CSV_HEADERS = [
@@ -58,6 +67,7 @@ export const CSV_HEADERS = [
   "FE_BATCH_ID",
   "FE_BATCH_FILE_COUNT",
   "FE_BATCH_SIZE_LIMIT",
+  "FE_BATCH_BYTE_LIMIT",
   "FE_SCOPE",
   "FE_INDEXED_FILE_COUNT",
   "FOREIGN_MEMBER_CALLS",
@@ -68,6 +78,7 @@ export const CSV_HEADERS = [
   "FILES_SELECTED",
   "FILES_ANALYZED",
   "PARSE_FAILURE_COUNT",
+  "RESOURCE_EXCLUSION_COUNT",
   "PROJECT_GROUPING",
   "LONG_LOC_THRESHOLD",
   "LONG_COMPOUND_ENABLED",
@@ -97,6 +108,17 @@ export const PARSE_FAILURE_HEADERS = [
   "ERROR_MESSAGE",
 ] as const;
 
+export const ANALYSIS_EXCLUSION_HEADERS = [
+  "PROJECT",
+  "FILE",
+  "RULE_ID",
+  "REASON",
+  "PARSER_VERSION",
+  "CSV_SCHEMA_VERSION",
+  "DETECTOR_VERSION",
+  "PROJECT_GROUPING",
+] as const;
+
 const SMELL_EXPORT_NAMES: Record<string, string> = {
   "Long Method": "LongMethod",
   "Complex Method": "ComplexMethod",
@@ -116,6 +138,7 @@ function defaultContext(results: MethodResult[]): CsvExportContext {
     selectedFileCount: new Set(results.map((result) => result.relativePath)).size,
     successfulFileCount: new Set(results.map((result) => result.relativePath)).size,
     parseFailureCount: 0,
+    resourceExclusionCount: 0,
     projectGrouping: "single-project",
   };
 }
@@ -161,6 +184,7 @@ export function toCsv(results: MethodResult[], context: CsvExportContext = defau
       result.feBatchId,
       result.feBatchFileCount,
       result.feBatchSizeLimit,
+      result.feBatchByteLimit,
       result.feScope,
       result.feIndexedFileCount,
       result.foreignMemberCalls,
@@ -171,6 +195,7 @@ export function toCsv(results: MethodResult[], context: CsvExportContext = defau
       context.selectedFileCount,
       context.successfulFileCount,
       context.parseFailureCount,
+      context.resourceExclusionCount,
       context.projectGrouping,
       context.thresholds.longLoc,
       Number(context.thresholds.longCompound),
@@ -219,7 +244,7 @@ export function toParseFailuresCsv(
   const lines = [PARSE_FAILURE_HEADERS.join(",")];
   for (const failure of failures) {
     lines.push([
-      project,
+      failure.project ?? project,
       failure.file,
       parserVersion,
       CSV_SCHEMA_VERSION,
@@ -239,4 +264,36 @@ export function downloadParseFailuresCsv(
   projectGrouping: ProjectGroupingMode = "single-project",
 ) {
   downloadText(toParseFailuresCsv(project, failures, parserVersion, projectGrouping), filename);
+}
+
+export function toAnalysisExclusionsCsv(
+  project: string,
+  exclusions: AnalysisExclusionExport[],
+  parserVersion: string,
+  projectGrouping: ProjectGroupingMode = "single-project",
+): string {
+  const lines = [ANALYSIS_EXCLUSION_HEADERS.join(",")];
+  for (const exclusion of exclusions) {
+    lines.push([
+      exclusion.project ?? project,
+      exclusion.file,
+      exclusion.ruleId,
+      exclusion.reason,
+      parserVersion,
+      CSV_SCHEMA_VERSION,
+      DETECTOR_VERSION,
+      projectGrouping,
+    ].map(csvEscape).join(","));
+  }
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+export function downloadAnalysisExclusionsCsv(
+  project: string,
+  exclusions: AnalysisExclusionExport[],
+  parserVersion: string,
+  filename: string,
+  projectGrouping: ProjectGroupingMode = "single-project",
+) {
+  downloadText(toAnalysisExclusionsCsv(project, exclusions, parserVersion, projectGrouping), filename);
 }

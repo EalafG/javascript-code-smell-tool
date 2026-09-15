@@ -1,9 +1,13 @@
-export const FEATURE_ENVY_INFERENCE_MODE = "project-static-object-type-inference-v2";
+import {
+  INFERENCE_PARTITION_BYTE_LIMIT,
+  INFERENCE_PARTITION_FILE_LIMIT,
+} from "./analysis-partitions.ts";
+
+export const FEATURE_ENVY_INFERENCE_MODE = "partitioned-project-static-object-type-inference-v3";
 export const FEATURE_ENVY_MAX_ITERATIONS = 12;
 export const FEATURE_ENVY_TYPE_SET_LIMIT = 12;
-// Retained in the export schema for backward compatibility. Zero means that
-// inference is unbounded and uses every successfully parsed project file.
-export const FEATURE_ENVY_BATCH_SIZE_LIMIT = 0;
+export const FEATURE_ENVY_BATCH_SIZE_LIMIT = INFERENCE_PARTITION_FILE_LIMIT;
+export const FEATURE_ENVY_BATCH_BYTE_LIMIT = INFERENCE_PARTITION_BYTE_LIMIT;
 
 export type InferenceAstNode = {
   type: string;
@@ -103,6 +107,7 @@ export type FeatureEnvyMetrics = {
   feBatchId: string;
   feBatchFileCount: number;
   feBatchSizeLimit: number;
+  feBatchByteLimit: number;
   feScope: string;
   feIndexedFileCount: number;
 };
@@ -1072,7 +1077,8 @@ export function calculateFeatureEnvyMetrics(
     feBatchId: model.batchId,
     feBatchFileCount: model.indexedSources.size,
     feBatchSizeLimit: FEATURE_ENVY_BATCH_SIZE_LIMIT,
-    feScope: "project",
+    feBatchByteLimit: FEATURE_ENVY_BATCH_BYTE_LIMIT,
+    feScope: "project-partition",
     feIndexedFileCount: model.indexedSources.size,
   };
 }
