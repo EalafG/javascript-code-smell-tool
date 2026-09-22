@@ -543,6 +543,18 @@ test("deduplicates exact rows without collapsing distinct same-line methods", ()
   assert.notEqual(results[0].startOffset, results[1].startOffset);
 });
 
+test("keeps identical method locations from different projects", () => {
+  const [method] = analyze("function shared() {}", "src/shared.js");
+  const results = assignDeterministicIds(deduplicateMethodResults([
+    { ...method, project: "project-b" },
+    { ...method, project: "project-a" },
+  ]));
+
+  assert.equal(results.length, 2);
+  assert.deepEqual(results.map((result) => result.project), ["project-a", "project-b"]);
+  assert.deepEqual(results.map((result) => result.id), ["M-000001", "M-000002"]);
+});
+
 test("low-memory finalization matches deterministic deduplication and ID assignment", () => {
   const analyzed = analyze("const first = () => 1; const second = () => 2;", "src/order.js");
   const withDuplicate = [analyzed[1], analyzed[0], analyzed[0]];
@@ -600,6 +612,8 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.ok(CSV_HEADERS.includes("IGNORED_FOLDERS"));
   assert.ok(CSV_HEADERS.includes("EXCLUDED_SOURCE_CATEGORIES"));
   assert.ok(CSV_HEADERS.includes("PROJECT_GROUPING"));
+  assert.ok(CSV_HEADERS.includes("ANALYSIS_RUN_COUNT"));
+  assert.ok(CSV_HEADERS.includes("SOURCE_PROVENANCE"));
   assert.ok(CSV_HEADERS.includes("LONG_LOC_THRESHOLD"));
   assert.ok(CSV_HEADERS.includes("CONDITIONAL_LOGICAL_OPS_MAX_ALLOWED"));
   assert.ok(CSV_HEADERS.includes("is_complex_conditional_sonar"));
@@ -622,6 +636,8 @@ test("freezes analysis-population provenance in every dataset row", () => {
     ignoredFolders: ["build", "dist"],
     excludedCategories: ["test", "vendor"],
     projectGrouping: "direct-subfolders",
+    analysisRunCount: 3,
+    sourceProvenance: ["github:example/alpha@abc123", "local:beta"],
   });
   const values = csv.trimEnd().split("\r\n")[1].split(",");
 
@@ -636,6 +652,8 @@ test("freezes analysis-population provenance in every dataset row", () => {
   assert.equal(values[CSV_HEADERS.indexOf("IGNORED_FOLDERS")], "build|dist");
   assert.equal(values[CSV_HEADERS.indexOf("EXCLUDED_SOURCE_CATEGORIES")], "test|vendor");
   assert.equal(values[CSV_HEADERS.indexOf("PROJECT_GROUPING")], "direct-subfolders");
+  assert.equal(values[CSV_HEADERS.indexOf("ANALYSIS_RUN_COUNT")], "3");
+  assert.equal(values[CSV_HEADERS.indexOf("SOURCE_PROVENANCE")], "github:example/alpha@abc123|local:beta");
 });
 
 test("exports parse failures as a stable escaped CSV", () => {

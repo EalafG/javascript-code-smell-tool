@@ -663,7 +663,8 @@ export function assignDeterministicIds(results: MethodResult[]): MethodResult[] 
 }
 
 function compareMethodResults(a: MethodResult, b: MethodResult): number {
-  return a.relativePath.localeCompare(b.relativePath) ||
+  return a.project.localeCompare(b.project) ||
+    a.relativePath.localeCompare(b.relativePath) ||
     a.startOffset - b.startOffset ||
     a.endOffset - b.endOffset ||
     a.startLine - b.startLine ||
@@ -673,6 +674,7 @@ function compareMethodResults(a: MethodResult, b: MethodResult): number {
 
 function methodIdentity(result: MethodResult): string {
   return [
+    result.project,
     result.relativePath,
     result.functionType,
     result.startOffset,

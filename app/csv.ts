@@ -1,10 +1,10 @@
 import { DEFAULT_THRESHOLDS } from "./analyzer.ts";
 import type { MethodResult, Thresholds } from "./analyzer.ts";
 
-export const CSV_SCHEMA_VERSION = "2.5.0";
-export const DETECTOR_VERSION = "0.6.1";
+export const CSV_SCHEMA_VERSION = "2.6.0";
+export const DETECTOR_VERSION = "0.7.0";
 
-export type ProjectGroupingMode = "single-project" | "direct-subfolders";
+export type ProjectGroupingMode = "single-project" | "direct-subfolders" | "cumulative-projects";
 
 export type CsvExportContext = {
   thresholds: Thresholds;
@@ -19,6 +19,8 @@ export type CsvExportContext = {
   ignoredFolders: string[];
   excludedCategories: string[];
   projectGrouping: ProjectGroupingMode;
+  analysisRunCount: number;
+  sourceProvenance: string[];
 };
 
 export type ParseFailureExport = {
@@ -90,6 +92,8 @@ export const CSV_HEADERS = [
   "IGNORED_FOLDERS",
   "EXCLUDED_SOURCE_CATEGORIES",
   "PROJECT_GROUPING",
+  "ANALYSIS_RUN_COUNT",
+  "SOURCE_PROVENANCE",
   "LONG_LOC_THRESHOLD",
   "LONG_COMPOUND_ENABLED",
   "LONG_CYCLO_THRESHOLD",
@@ -155,6 +159,8 @@ function defaultContext(results: MethodResult[]): CsvExportContext {
     ignoredFolders: ["build", "coverage", "dist", "node_modules"],
     excludedCategories: [],
     projectGrouping: "single-project",
+    analysisRunCount: 1,
+    sourceProvenance: [...new Set(results.map((result) => `local:${result.project}`))].sort(),
   };
 }
 
@@ -217,6 +223,8 @@ export function toCsv(results: MethodResult[], context: CsvExportContext = defau
       context.ignoredFolders.join("|"),
       context.excludedCategories.join("|"),
       context.projectGrouping,
+      context.analysisRunCount,
+      context.sourceProvenance.join("|"),
       context.thresholds.longLoc,
       Number(context.thresholds.longCompound),
       context.thresholds.longCyclo,

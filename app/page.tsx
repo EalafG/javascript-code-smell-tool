@@ -24,6 +24,7 @@ import {
   downloadParseFailuresCsv,
 } from "./csv";
 import type { ProjectGroupingMode } from "./csv";
+import { importPublicGitHubRepository } from "./github-import";
 import { useCodeThemePreference } from "./code-theme";
 import { CodeThemeToggle, SyntaxCode } from "./code-viewer";
 import { ValidationSampleBuilder } from "./ValidationSampleBuilder";
@@ -43,11 +44,14 @@ type ParserStatus = "loading" | "ready" | "unavailable" | "parse-error";
 type ResultTab = "dataset" | "segments" | "distribution";
 type StatusFilter = "all" | "clean" | "smelly";
 type SmellFilter = "all" | "long" | "complex" | "conditional" | "envy";
-type ProjectOrganization = ProjectGroupingMode;
+type ProjectOrganization = Exclude<ProjectGroupingMode, "cumulative-projects">;
+type AnalysisMode = "replace" | "append";
 
 type SelectedFile = {
   file: File;
   relativePath: string;
+  project?: string;
+  sourceProvenance?: string;
 };
 
 type ParseFailure = {
@@ -64,12 +68,18 @@ type AnalysisExclusion = {
 };
 
 type AnalysisRunProfile = {
-  key: string;
-  projectOrganization: ProjectOrganization;
+  settingsKey: string;
+  projectOrganization: ProjectGroupingMode;
   resourceSafeguard: boolean;
   discoveredFileCount: number;
   ignoredFolders: string[];
   excludedCategories: string[];
+  runCount: number;
+  projects: string[];
+  discoveredFileKeys: string[];
+  selectedFileKeys: string[];
+  successfulFileKeys: string[];
+  sourceProvenance: string[];
 };
 
 const SUPPORTED_EXTENSION = /\.(js|mjs|cjs|jsx)$/i;
@@ -110,6 +120,47 @@ function analysisProjectFor(relativePath: string, fallback: string, organization
   if (organization === "single-project" || relativePath === "pasted-snippet.js") return fallback;
   const parts = relativePath.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts.length >= 3 ? parts[1] : fallback;
+}
+
+function sortedUnique(values: string[]): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b));
+}
+
+function sourceIdentity(project: string, relativePath: string, size: number, provenance: string): string {
+  return [project, relativePath, size, provenance].join("\u0000");
+}
+
+function projectKey(project: string): string {
+  return project.trim().toLocaleLowerCase();
+}
+
+function mergeAnalysisProfiles(existing: AnalysisRunProfile, incoming: AnalysisRunProfile): AnalysisRunProfile {
+  const discoveredFileKeys = sortedUnique([...existing.discoveredFileKeys, ...incoming.discoveredFileKeys]);
+  return {
+    ...incoming,
+    projectOrganization: "cumulative-projects",
+    discoveredFileCount: discoveredFileKeys.length,
+    runCount: existing.runCount + 1,
+    projects: sortedUnique([...existing.projects, ...incoming.projects]),
+    discoveredFileKeys,
+    selectedFileKeys: sortedUnique([...existing.selectedFileKeys, ...incoming.selectedFileKeys]),
+    successfulFileKeys: sortedUnique([...existing.successfulFileKeys, ...incoming.successfulFileKeys]),
+    sourceProvenance: sortedUnique([...existing.sourceProvenance, ...incoming.sourceProvenance]),
+  };
+}
+
+function deduplicateParseFailures(failures: ParseFailure[]): ParseFailure[] {
+  return [...new Map(failures.map((failure) => [
+    [failure.project, failure.file, failure.message].join("\u0000"),
+    failure,
+  ])).values()].sort((a, b) => a.project.localeCompare(b.project) || a.file.localeCompare(b.file) || a.message.localeCompare(b.message));
+}
+
+function deduplicateAnalysisExclusions(exclusions: AnalysisExclusion[]): AnalysisExclusion[] {
+  return [...new Map(exclusions.map((exclusion) => [
+    [exclusion.project, exclusion.file, exclusion.ruleId, exclusion.reason].join("\u0000"),
+    exclusion,
+  ])).values()].sort((a, b) => a.project.localeCompare(b.project) || a.file.localeCompare(b.file) || a.ruleId.localeCompare(b.ruleId));
 }
 
 function yieldToBrowser(): Promise<void> {
@@ -167,6 +218,11 @@ export default function Home() {
   const [snippet, setSnippet] = useState("");
   const [projectName, setProjectName] = useState("javascript-project");
   const [projectOrganization, setProjectOrganization] = useState<ProjectOrganization>("single-project");
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("replace");
+  const [githubUrl, setGitHubUrl] = useState("");
+  const [githubRef, setGitHubRef] = useState("");
+  const [isImportingGitHub, setIsImportingGitHub] = useState(false);
+  const [githubImportSummary, setGitHubImportSummary] = useState("");
   const [ignoredFolders, setIgnoredFolders] = useState<Record<string, boolean>>({
     node_modules: true,
     dist: true,
@@ -252,7 +308,7 @@ export default function Home() {
     if (!activeFiles.length && !snippet.trim()) return 0;
     const fallback = projectName.trim() || "javascript-project";
     return new Set([
-      ...activeFiles.map(({ relativePath }) => analysisProjectFor(relativePath, fallback, projectOrganization)),
+      ...activeFiles.map(({ relativePath, project }) => project ?? analysisProjectFor(relativePath, fallback, projectOrganization)),
       ...(snippet.trim() ? [fallback] : []),
     ]).size;
   }, [activeFiles, projectName, projectOrganization, snippet]);
@@ -266,29 +322,47 @@ export default function Home() {
       .filter(([, enabled]) => enabled)
       .map(([category]) => category)
       .sort();
-    const inputFiles = selectedFiles
-      .map(({ file, relativePath }) => `${relativePath}\u0000${file.size}\u0000${file.lastModified}`)
-      .sort();
+    const fallbackProject = projectName.trim() || "javascript-project";
+    const describe = ({ file, relativePath, project: projectOverride, sourceProvenance }: SelectedFile) => {
+      const project = projectOverride ?? analysisProjectFor(relativePath, fallbackProject, projectOrganization);
+      const provenance = sourceProvenance ?? `local:${project}`;
+      return { project, provenance, key: sourceIdentity(project, relativePath, file.size, provenance) };
+    };
+    const discovered = selectedFiles.map(describe);
+    const selected = activeFiles.map(describe);
+    if (snippet.trim()) {
+      const provenance = `local:${fallbackProject}`;
+      const size = new Blob([snippet]).size;
+      const descriptor = {
+        project: fallbackProject,
+        provenance,
+        key: sourceIdentity(fallbackProject, "pasted-snippet.js", size, provenance),
+      };
+      discovered.push(descriptor);
+      selected.push(descriptor);
+    }
     return {
-      key: JSON.stringify({
-        projectName: projectName.trim() || "javascript-project",
-        projectOrganization,
+      settingsKey: JSON.stringify({
         resourceSafeguard,
         enabledFolders,
         enabledCategories,
-        inputFiles,
-        snippet,
       }),
       projectOrganization,
       resourceSafeguard,
-      discoveredFileCount: selectedFiles.length + Number(Boolean(snippet.trim())),
+      discoveredFileCount: discovered.length,
       ignoredFolders: enabledFolders,
       excludedCategories: enabledCategories,
+      runCount: 1,
+      projects: sortedUnique(selected.map((item) => item.project)),
+      discoveredFileKeys: sortedUnique(discovered.map((item) => item.key)),
+      selectedFileKeys: sortedUnique(selected.map((item) => item.key)),
+      successfulFileKeys: [],
+      sourceProvenance: sortedUnique(selected.map((item) => item.provenance)),
     };
-  }, [excludedCategories, ignoredFolders, projectName, projectOrganization, resourceSafeguard, selectedFiles, snippet]);
+  }, [activeFiles, excludedCategories, ignoredFolders, projectName, projectOrganization, resourceSafeguard, selectedFiles, snippet]);
 
   const analysisSettingsChanged = Boolean(
-    results.length && analysisRunProfile && analysisRunProfile.key !== currentRunProfile.key,
+    results.length && analysisRunProfile && analysisRunProfile.settingsKey !== currentRunProfile.settingsKey,
   );
 
   const exportContext = useMemo(() => ({
@@ -306,6 +380,8 @@ export default function Home() {
     ignoredFolders: analysisRunProfile?.ignoredFolders ?? currentRunProfile.ignoredFolders,
     excludedCategories: analysisRunProfile?.excludedCategories ?? currentRunProfile.excludedCategories,
     projectGrouping: analysisRunProfile?.projectOrganization ?? currentRunProfile.projectOrganization,
+    analysisRunCount: analysisRunProfile?.runCount ?? currentRunProfile.runCount,
+    sourceProvenance: analysisRunProfile?.sourceProvenance ?? currentRunProfile.sourceProvenance,
   }), [thresholds, parserVersion, filesSubmitted, filesAnalyzed, parseFailures.length, analysisExclusions.length, analysisRunProfile, currentRunProfile]);
 
   const stats = useMemo(() => {
@@ -351,32 +427,87 @@ export default function Home() {
 
   function addFiles(event: ChangeEvent<HTMLInputElement>, folderSelection: boolean) {
     const files = Array.from(event.target.files ?? []).filter((file) => SUPPORTED_EXTENSION.test(file.name));
-    const incoming = files.map((file) => ({
+    const relativePaths = files.map((file) => folderSelection
+      ? ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name).replace(/\\/g, "/")
+      : file.name);
+    const inferredProject = folderSelection && relativePaths[0]?.includes("/") ? relativePaths[0].split("/")[0] : "";
+    const nestedProjects = new Set(relativePaths.map((relativePath) => {
+      const parts = relativePath.split("/").filter(Boolean);
+      return parts.length >= 3 ? parts[1] : "";
+    }).filter(Boolean));
+    const isProjectCollection = Boolean(
+      inferredProject && COLLECTION_ROOT_NAMES.has(inferredProject.toLowerCase()) && nestedProjects.size > 1,
+    );
+    const incoming = files.map((file, index) => ({
       file,
-      relativePath: folderSelection
-        ? ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name).replace(/\\/g, "/")
-        : file.name,
+      relativePath: relativePaths[index],
+      project: inferredProject && !isProjectCollection ? inferredProject : undefined,
     }));
     setSelectedFiles((current) => {
       const unique = new Map<string, SelectedFile>();
-      for (const item of [...current, ...incoming]) {
-        unique.set(`${item.relativePath}\u0000${item.file.size}\u0000${item.file.lastModified}`, item);
+      const existingProjects = new Set((analysisRunProfile?.projects ?? []).map(projectKey));
+      const fallback = projectName.trim() || "javascript-project";
+      const retained = analysisMode === "append" && rawResults.length
+        ? current.filter((item) => !existingProjects.has(projectKey(item.project ?? analysisProjectFor(item.relativePath, fallback, projectOrganization))))
+        : current;
+      for (const item of [...retained, ...incoming]) {
+        unique.set(`${item.project ?? ""}\u0000${item.relativePath}`, item);
       }
       return [...unique.values()].sort((a, b) => a.relativePath.localeCompare(b.relativePath));
     });
-    if (folderSelection && incoming[0]?.relativePath.includes("/")) {
-      const inferredProject = incoming[0].relativePath.split("/")[0];
-      setProjectName((current) => current === "javascript-project" ? inferredProject : current);
-      const nestedProjects = new Set(incoming.map(({ relativePath }) => {
-        const parts = relativePath.split("/").filter(Boolean);
-        return parts.length >= 3 ? parts[1] : "";
-      }).filter(Boolean));
-      if (COLLECTION_ROOT_NAMES.has(inferredProject.toLowerCase()) && nestedProjects.size > 1) {
-        setProjectOrganization("direct-subfolders");
+    if (inferredProject) {
+      setProjectName(inferredProject);
+      setProjectOrganization(isProjectCollection ? "direct-subfolders" : "single-project");
+      if (analysisMode === "append" && rawResults.length && analysisRunProfile?.projects.some((project) => projectKey(project) === projectKey(projectName.trim() || "javascript-project"))) {
+        setSnippet("");
       }
     }
     setInputMessage(files.length ? "" : "No supported JavaScript files were found in that selection.");
     event.target.value = "";
+  }
+
+  async function importGitHubRepository() {
+    if (isAnalyzing || isImportingGitHub) return;
+    setIsImportingGitHub(true);
+    setInputMessage("");
+    setGitHubImportSummary("");
+    try {
+      const imported = await importPublicGitHubRepository(githubUrl, githubRef, fetch, ({ completed, total }) => {
+        setGitHubImportSummary(`Downloading JavaScript files · ${completed.toLocaleString()} / ${total.toLocaleString()}`);
+      });
+      const incoming: SelectedFile[] = imported.files.map((entry) => ({
+        file: new File([entry.bytes], entry.fileName, {
+          type: "text/javascript",
+          lastModified: 0,
+        }),
+        relativePath: entry.relativePath,
+        project: imported.repository,
+        sourceProvenance: imported.provenance,
+      }));
+      setSelectedFiles((current) => {
+        const unique = new Map<string, SelectedFile>();
+        const existingProjects = new Set((analysisRunProfile?.projects ?? []).map(projectKey));
+        const fallback = projectName.trim() || "javascript-project";
+        const retained = rawResults.length
+          ? current.filter((item) => !existingProjects.has(projectKey(item.project ?? analysisProjectFor(item.relativePath, fallback, projectOrganization))))
+          : current;
+        for (const item of [...retained, ...incoming]) unique.set(`${item.project ?? ""}\u0000${item.relativePath}`, item);
+        return [...unique.values()].sort((a, b) => (a.project ?? "").localeCompare(b.project ?? "") || a.relativePath.localeCompare(b.relativePath));
+      });
+      setProjectName(imported.repository);
+      setProjectOrganization("single-project");
+      setGitHubRef(imported.requestedRef);
+      if (rawResults.length) {
+        setAnalysisMode("append");
+        if (analysisRunProfile?.projects.some((project) => projectKey(project) === projectKey(projectName.trim() || "javascript-project"))) setSnippet("");
+      }
+      setGitHubImportSummary(`${imported.owner}/${imported.repository}@${imported.resolvedCommitSha.slice(0, 12)} · ${incoming.length} files`);
+      setInputMessage(`Loaded a reproducible GitHub snapshot at commit ${imported.resolvedCommitSha.slice(0, 12)}. Choose Replace or Add to dataset, then analyze.`);
+    } catch (error) {
+      setInputMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsImportingGitHub(false);
+    }
   }
 
   async function runAnalysis() {
@@ -391,28 +522,54 @@ export default function Home() {
       relativePath: string;
       project: string;
       size: number;
+      provenance: string;
+      identityKey: string;
       read: () => Promise<string>;
-    }> = activeFiles.map(({ file, relativePath }) => ({
-      fileName: file.name,
-      relativePath,
-      project: analysisProjectFor(relativePath, fallbackProject, projectOrganization),
-      size: file.size,
-      read: () => file.text(),
-    }));
+    }> = activeFiles.map(({ file, relativePath, project: projectOverride, sourceProvenance }) => {
+      const project = projectOverride ?? analysisProjectFor(relativePath, fallbackProject, projectOrganization);
+      const provenance = sourceProvenance ?? `local:${project}`;
+      return {
+        fileName: file.name,
+        relativePath,
+        project,
+        size: file.size,
+        provenance,
+        identityKey: sourceIdentity(project, relativePath, file.size, provenance),
+        read: () => file.text(),
+      };
+    });
     if (snippet.trim()) {
+      const size = new Blob([snippet]).size;
+      const provenance = `local:${fallbackProject}`;
       sourceEntries.push({
         fileName: "pasted-snippet.js",
         relativePath: "pasted-snippet.js",
         project: fallbackProject,
-        size: new Blob([snippet]).size,
+        size,
+        provenance,
+        identityKey: sourceIdentity(fallbackProject, "pasted-snippet.js", size, provenance),
         read: async () => snippet,
       });
     }
-    sourceEntries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+    sourceEntries.sort((a, b) => a.project.localeCompare(b.project) || a.relativePath.localeCompare(b.relativePath));
 
     if (!sourceEntries.length) {
       setInputMessage("Select JavaScript files, a project folder, or paste a snippet first.");
       return;
+    }
+
+    const appendToDataset = analysisMode === "append" && rawResults.length > 0;
+    if (appendToDataset && analysisRunProfile?.settingsKey !== currentRunProfile.settingsKey) {
+      setInputMessage("The source-exclusion or resource-safeguard settings differ from the existing dataset. Restore the previous settings or use Replace dataset so one export has a single reproducible analysis profile.");
+      return;
+    }
+    if (appendToDataset && analysisRunProfile) {
+      const existingProjectKeys = new Set(analysisRunProfile.projects.map(projectKey));
+      const overlappingProjects = currentRunProfile.projects.filter((project) => existingProjectKeys.has(projectKey(project)));
+      if (overlappingProjects.length) {
+        setInputMessage(`Add to dataset requires new project names. These projects already exist: ${overlappingProjects.join(", ")}. Clear the previous input or use Replace dataset to reanalyze them.`);
+        return;
+      }
     }
 
     const runProfile = currentRunProfile;
@@ -420,19 +577,13 @@ export default function Home() {
     setIsAnalyzing(true);
     cancelAnalysisRef.current = false;
     setInputMessage("");
-    setRawResults([]);
-    setParseFailures([]);
-    setAnalysisExclusions([]);
-    setAnalysisRunProfile(null);
-    setFilesAnalyzed(0);
     setParserStatus("ready");
-    setFilesSubmitted(sourceEntries.length);
     setProgress({ current: 0, total: sourceEntries.length * 2, stage: "Preparing project groups" });
 
     const failures: ParseFailure[] = [];
     const resourceExclusions: AnalysisExclusion[] = [];
     const collected: MethodResult[] = [];
-    let successfulFiles = 0;
+    const successfulFileKeys: string[] = [];
     let completedWork = 0;
     let lastUiUpdate = 0;
     const totalWork = sourceEntries.length * 2;
@@ -545,7 +696,7 @@ export default function Home() {
                 relativePath: entry.relativePath,
               });
               for (const result of analyzeParsedSource(parsed, thresholds, inferenceModel)) collected.push(result);
-              successfulFiles += 1;
+              successfulFileKeys.push(entry.identityKey);
             } catch (error) {
               failures.push({
                 project: analysisProject,
@@ -568,17 +719,35 @@ export default function Home() {
 
       setProgress({ current: totalWork, total: totalWork, stage: "Preparing deterministic method IDs" });
       await yieldToBrowser();
-      setRawResults(finalizeMethodResultsInPlace(collected));
-      setAnalysisRunProfile(runProfile);
-      setFilesAnalyzed(successfulFiles);
-      setParseFailures(failures);
-      setAnalysisExclusions(resourceExclusions);
-      setParserStatus(failures.length ? "parse-error" : "ready");
+      const completedProfile: AnalysisRunProfile = {
+        ...runProfile,
+        successfulFileKeys: sortedUnique(successfulFileKeys),
+      };
+      const nextProfile = appendToDataset && analysisRunProfile
+        ? mergeAnalysisProfiles(analysisRunProfile, completedProfile)
+        : completedProfile;
+      const nextResults = finalizeMethodResultsInPlace([
+        ...(appendToDataset ? rawResults.map((result) => ({ ...result })) : []),
+        ...collected,
+      ]);
+      const nextFailures = deduplicateParseFailures([
+        ...(appendToDataset ? parseFailures : []),
+        ...failures,
+      ]);
+      const nextExclusions = deduplicateAnalysisExclusions([
+        ...(appendToDataset ? analysisExclusions : []),
+        ...resourceExclusions,
+      ]);
+      setRawResults(nextResults);
+      setAnalysisRunProfile(nextProfile);
+      setFilesAnalyzed(nextProfile.successfulFileKeys.length);
+      setFilesSubmitted(nextProfile.selectedFileKeys.length);
+      setParseFailures(nextFailures);
+      setAnalysisExclusions(nextExclusions);
+      setParserStatus(nextFailures.length ? "parse-error" : "ready");
       setActiveTab("dataset");
-      setInputMessage(`${projectPlans.length} project${projectPlans.length === 1 ? " was" : "s were"} analyzed in ${totalPartitions} deterministic memory partition${totalPartitions === 1 ? "" : "s"}. ${resourceExclusions.length} resource-risk file${resourceExclusions.length === 1 ? " was" : "s were"} excluded and logged.`);
+      setInputMessage(`${projectPlans.length} project${projectPlans.length === 1 ? " was" : "s were"} ${appendToDataset ? "added to" : "used to replace"} the dataset in ${totalPartitions} deterministic memory partition${totalPartitions === 1 ? "" : "s"}. The dataset now contains ${nextResults.length.toLocaleString()} methods from ${nextProfile.projects.length} project${nextProfile.projects.length === 1 ? "" : "s"}.`);
     } catch (error) {
-      setParseFailures(failures);
-      setAnalysisExclusions(resourceExclusions);
       setInputMessage(`Analysis stopped safely: ${error instanceof Error ? error.message : String(error)}. Try excluding generated code or enabling multi-project mode for a repository collection.`);
     } finally {
       cancelAnalysisRef.current = false;
@@ -653,17 +822,44 @@ export default function Home() {
               <p className="section-kicker">01 · SOURCE</p>
               <h2 id="source-heading">Analyze JavaScript locally</h2>
               <p>
-                Analyze files, a project folder, or a pasted JavaScript sample. Processing stays on this device.
+                Analyze local files, a folder, a public GitHub repository, or a pasted sample. Source analysis stays in this browser.
               </p>
             </div>
             <div className="analysis-actions">
+              <div className="dataset-mode" role="group" aria-label="Dataset update mode">
+                <button
+                  type="button"
+                  className={analysisMode === "replace" ? "is-active" : ""}
+                  aria-pressed={analysisMode === "replace"}
+                  onClick={() => setAnalysisMode("replace")}
+                  disabled={isAnalyzing}
+                >
+                  Replace
+                </button>
+                <button
+                  type="button"
+                  className={analysisMode === "append" ? "is-active" : ""}
+                  aria-pressed={analysisMode === "append"}
+                  onClick={() => setAnalysisMode("append")}
+                  disabled={isAnalyzing || rawResults.length === 0}
+                  title={rawResults.length ? "Add new projects to the current dataset" : "Analyze the first dataset before appending"}
+                >
+                  Add to dataset
+                </button>
+              </div>
               <button
                 className="primary-button"
                 type="button"
                 onClick={runAnalysis}
-                disabled={isAnalyzing || parserStatus === "loading" || parserStatus === "unavailable"}
+                disabled={isAnalyzing || isImportingGitHub || parserStatus === "loading" || parserStatus === "unavailable"}
               >
-                {isAnalyzing ? `Analyzing ${progress.current}/${progress.total}` : "Analyze source"}
+                {isAnalyzing
+                  ? `Analyzing ${progress.current}/${progress.total}`
+                  : analysisMode === "append" && rawResults.length
+                    ? "Analyze and add"
+                    : rawResults.length
+                      ? "Analyze and replace"
+                      : "Analyze source"}
               </button>
               {isAnalyzing && <button className="secondary-button" type="button" onClick={cancelAnalysis}>Cancel safely</button>}
             </div>
@@ -674,7 +870,7 @@ export default function Home() {
               <span>Project name</span>
               <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="projectA" />
             </label>
-            <div className="privacy-note"><span aria-hidden="true">●</span> Local browser analysis · no source upload</div>
+            <div className="privacy-note"><span aria-hidden="true">●</span> Browser-local analysis · GitHub source fetched directly</div>
           </div>
 
           <div className="input-grid">
@@ -720,13 +916,51 @@ export default function Home() {
             </div>
           </div>
 
+          <div className="github-import-card">
+            <div className="github-import-card__copy">
+              <span className="tile-index">GITHUB</span>
+              <div>
+                <strong>Load a public repository</strong>
+                <p>The selected branch, tag, or commit is resolved to an exact SHA for reproducible exports.</p>
+              </div>
+            </div>
+            <label>
+              <span>Repository URL</span>
+              <input
+                type="url"
+                value={githubUrl}
+                onChange={(event) => setGitHubUrl(event.target.value)}
+                placeholder="https://github.com/owner/repository"
+                disabled={isImportingGitHub || isAnalyzing}
+              />
+            </label>
+            <label className="github-ref-field">
+              <span>Ref <small>optional</small></span>
+              <input
+                value={githubRef}
+                onChange={(event) => setGitHubRef(event.target.value)}
+                placeholder="default branch"
+                disabled={isImportingGitHub || isAnalyzing}
+              />
+            </label>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={importGitHubRepository}
+              disabled={!githubUrl.trim() || isImportingGitHub || isAnalyzing}
+            >
+              {isImportingGitHub ? "Loading repository…" : "Load repository"}
+            </button>
+            {githubImportSummary && <small className="github-import-summary">{githubImportSummary}</small>}
+          </div>
+
           <div className="selection-bar">
             <div>
               <strong>{activeFiles.length}</strong> supported file{activeFiles.length === 1 ? "" : "s"} ready
               {skippedFileCount > 0 && <span> · {skippedFileCount} ignored by active exclusion rules</span>}
             </div>
             {(selectedFiles.length > 0 || snippet) && (
-              <button type="button" className="text-button" onClick={() => { setSelectedFiles([]); setSnippet(""); setProjectOrganization("single-project"); }}>
+              <button type="button" className="text-button" onClick={() => { setSelectedFiles([]); setSnippet(""); setProjectOrganization("single-project"); setGitHubImportSummary(""); }}>
                 Clear input
               </button>
             )}
@@ -891,12 +1125,13 @@ export default function Home() {
             <div className={`analysis-basis ${analysisSettingsChanged ? "analysis-basis--changed" : ""}`} role="status">
               <div>
                 <strong>{exportContext.analysisProfile === "authored-source-v1" ? "Authored-source profile" : "All selected source profile"}</strong>
-                <span>Detector {DETECTOR_VERSION} · CSV schema {CSV_SCHEMA_VERSION} · {exportContext.projectGrouping.replace("-", " ")}</span>
+                <span>Detector {DETECTOR_VERSION} · CSV schema {CSV_SCHEMA_VERSION} · {exportContext.projectGrouping.replaceAll("-", " ")} · {exportContext.analysisRunCount} analysis run{exportContext.analysisRunCount === 1 ? "" : "s"}</span>
               </div>
               <p>
                 {filesSubmitted.toLocaleString()} files submitted · {analysisExclusions.length.toLocaleString()} resource exclusions · percentages use {results.length.toLocaleString()} analyzed methods.
               </p>
               <p>Threshold changes intentionally re-label this fixed method population and are recorded in every export.</p>
+              <p>Source provenance: {exportContext.sourceProvenance.join(" · ") || "local source"}</p>
               {analysisSettingsChanged && <p><strong>Settings changed after this run.</strong> Analyze again before comparing or exporting the new configuration.</p>}
             </div>
           )}
@@ -973,7 +1208,7 @@ export default function Home() {
                   parseFailures,
                   parserVersion || "Acorn 8+",
                   "javascript-code-smell-parse-failures.csv",
-                  projectOrganization,
+                  exportContext.projectGrouping,
                 )}>Export parse failures</button>
               )}
               {analysisExclusions.length > 0 && (
@@ -982,7 +1217,7 @@ export default function Home() {
                   analysisExclusions,
                   parserVersion || "Acorn 8+",
                   "javascript-code-smell-analysis-exclusions.csv",
-                  projectOrganization,
+                  exportContext.projectGrouping,
                 )}>Export analysis exclusions</button>
               )}
               <button className="secondary-button" type="button" disabled={!results.length} onClick={() => downloadCsv(results, "javascript-code-smell-dataset.csv", exportContext)}>Export all CSV</button>

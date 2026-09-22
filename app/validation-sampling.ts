@@ -1,5 +1,6 @@
 import type { MethodResult, SourceCategory, Thresholds } from "./analyzer.ts";
 import { CSV_SCHEMA_VERSION, DETECTOR_VERSION } from "./csv.ts";
+import type { ProjectGroupingMode } from "./csv.ts";
 
 export type SamplingPreset = "pilot" | "representative" | "audit";
 export type SamplingPhase = "pilot" | "main" | "audit";
@@ -56,7 +57,9 @@ export type SamplingBuildContext = {
   resourceSafeguardEnabled: boolean;
   ignoredFolders: string[];
   excludedCategories: string[];
-  projectGrouping: "single-project" | "direct-subfolders";
+  projectGrouping: ProjectGroupingMode;
+  analysisRunCount: number;
+  sourceProvenance: string[];
 };
 
 export type SamplingArtifact = {
@@ -563,6 +566,8 @@ async function datasetFingerprint(results: MethodResult[], context: SamplingBuil
     ignoredFolders: context.ignoredFolders,
     excludedCategories: context.excludedCategories,
     projectGrouping: context.projectGrouping,
+    analysisRunCount: context.analysisRunCount,
+    sourceProvenance: context.sourceProvenance,
     thresholds: context.thresholds,
     chunkHashes,
   }));
@@ -729,6 +734,8 @@ export async function buildValidationSamplePackage(
       ignoredFolders: context.ignoredFolders,
       excludedCategories: context.excludedCategories,
       projectGrouping: context.projectGrouping,
+      analysisRunCount: context.analysisRunCount,
+      sourceProvenance: context.sourceProvenance,
     },
     design: {
       ...config,

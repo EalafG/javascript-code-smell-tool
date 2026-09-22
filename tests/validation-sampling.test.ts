@@ -110,6 +110,8 @@ const context = {
   ignoredFolders: ["build", "coverage", "dist", "node_modules"],
   excludedCategories: [],
   projectGrouping: "direct-subfolders" as const,
+  analysisRunCount: 1,
+  sourceProvenance: ["local:alpha", "local:beta"],
 };
 
 test("builds a deterministic blinded sample and keeps private detector evidence separate", async () => {
