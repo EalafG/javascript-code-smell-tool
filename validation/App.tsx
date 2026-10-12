@@ -4,6 +4,7 @@ import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { useCodeThemePreference } from "../app/code-theme";
 import { CodeThemeToggle, SyntaxCode } from "../app/code-viewer";
 import { getSupabaseClient } from "./supabase";
+import AnalysisApp from "./AnalysisApp";
 import type {
   AnnotationRecord,
   CodeReviewFrequency,
@@ -368,6 +369,7 @@ function LocalDatasetEntry({ onLoad }: { onLoad: (payload: PilotPayload) => void
         <div className="privacy-callout">
           Dataset files and source-derived samples are deliberately excluded from the public GitHub repository.
         </div>
+        <a className="button button--secondary entry-analysis-link" href="?analysis=1">Analyze completed validations</a>
         <a className="quiet-link" href="../">Return to the detector</a>
       </section>
     </main>
@@ -1080,6 +1082,7 @@ function LocalApp() {
 }
 
 export default function ValidationApp() {
+  if (new URLSearchParams(window.location.search).has("analysis")) return <AnalysisApp />;
   const client = getSupabaseClient();
   return client ? <HostedApp client={client} /> : <LocalApp />;
 }

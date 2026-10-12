@@ -57,6 +57,16 @@ The download is one ZIP with intentionally separated outputs:
 
 Only give a validator their matching file. Keep the complete package—especially `private/`—in restricted research storage and never commit a generated study package to the public repository. A controlled smelly/clean target is suitable for calibration or detector auditing, but its raw proportions must not be interpreted as prevalence. Use the Representative preset with natural distribution when population composition is the research target. See [the browser sampling protocol](validation/protocol/browser-sampling-plan.md).
 
+## Validation analysis
+
+Open `validation/?analysis=1`, or select **Analyze completed validations** on the local validation entry page. The private, browser-local analysis view accepts:
+
+1. `private/sampling-manifest.csv` from the validation package, or a detector dataset CSV containing the four binary labels.
+2. Multiple exported `upm-code-smell-validation-annotations.csv` files selected together.
+3. Optionally, `validation-sample.blinded.json` to display the matching source segments.
+
+The analysis joins blinded `V-...` sample IDs to the original `M-...` detector IDs through the private manifest, retains only the latest revision for each validator and method, and shows every raw judgment and note. It calculates TP, TN, FP, FN, accuracy, precision, recall, specificity, F1, balanced accuracy, Matthews correlation coefficient, pairwise agreement, Krippendorff's alpha, and Fleiss' kappa for each smell. Present, Absent, and Uncertain remain separate nominal categories for agreement calculations. Uncertain decisions and tied consensus are reported and excluded from binary detector-performance metrics. All uploaded files remain on the device.
+
 ## Method-level metrics
 
 Every function declaration, function expression, arrow function, object method, and ES6 class method becomes one deterministic dataset row. Nested functions are independent rows and are excluded from their parent's AST-traversal metrics. Their substantive declaration source remains part of the parent's physical/code line counts because it is textually inside the parent segment.
