@@ -42,7 +42,9 @@ KNOWN_EXTERNAL_PREFIXES = (
     "jspaint/lib/",
     "maptalks.js/packages/transcoders.crn/src/lib/",
     "maptalks.js/packages/transcoders.draco/src/lib/",
+    "maptalks.js/packages/transcoders.ktx/src/lib/",
     "maptalks.js/packages/transcoders.ktx2/src/lib/",
+    "xeokit-sdk/src/plugins/xml3dloaderplugin/zipjs/",
     "xeokit-sdk/typedocs/assets/",
 )
 KNOWN_PARSE_FAILURES = {
@@ -72,6 +74,7 @@ COMPACT_FIELDS = (
     "CODE_CATEGORY",
     "FUNCTION",
     "FUNCTION_TYPE",
+    "IS_CONSTRUCTOR",
     "START_LINE",
     "END_LINE",
     "LOC",
@@ -94,6 +97,13 @@ COMPACT_FIELDS = (
     "LAA_EXACT",
     "FDP",
     "FOREIGN_PROVIDERS",
+    "RESOLVED_ATD",
+    "RESOLVED_ATFD",
+    "RESOLVED_LAA",
+    "RESOLVED_LAA_EXACT",
+    "RESOLVED_FDP",
+    "RESOLVED_FOREIGN_PROVIDERS",
+    "FE_OWNER_RESOLVED",
     "TYPE_INFERENCE_COVERAGE",
     "UNKNOWN_ACCESS_COUNT",
     "CSV_SCHEMA_VERSION",
@@ -126,6 +136,7 @@ PILOT_FIELDS = (
     "DATASET_FILE",
     "FUNCTION",
     "FUNCTION_TYPE",
+    "IS_CONSTRUCTOR",
     "START_LINE",
     "END_LINE",
     "CONTEXT_START_LINE",
@@ -165,6 +176,13 @@ PILOT_FIELDS = (
     "LAA_EXACT",
     "FDP",
     "FOREIGN_PROVIDERS",
+    "RESOLVED_ATD",
+    "RESOLVED_ATFD",
+    "RESOLVED_LAA",
+    "RESOLVED_LAA_EXACT",
+    "RESOLVED_FDP",
+    "RESOLVED_FOREIGN_PROVIDERS",
+    "FE_OWNER_RESOLVED",
     "TYPE_INFERENCE_COVERAGE",
     "UNKNOWN_ACCESS_COUNT",
     "is_long_method",
@@ -258,6 +276,7 @@ def exclusion_for(relative_path: str, method_count: int) -> tuple[str, str, str]
         or ".bundle." in file_name
         or file_name.endswith("-bundle.js")
         or file_name.endswith(".bundled.js")
+        or "bundled" in file_name
         or "generated" in file_name
     ):
         return "EXCLUDE", "GENERATED_OR_BUNDLED", "Filename indicates generated, minified, or bundled code."
@@ -402,13 +421,13 @@ def candidate_pool(role: str, rows: list[dict[str, str]]) -> tuple[list[dict[str
         pool = [
             row for row in rows
             if row["is_feature_envy"] == "0"
-            and as_int(row, "ATD") > 0
-            and as_int(row, "ATFD") >= 2
+            and as_int(row, "RESOLVED_ATD") > 0
+            and as_int(row, "RESOLVED_ATFD") >= 2
         ]
         return pool, lambda row: (
-            abs(4 - as_int(row, "ATFD"))
-            + abs((1 / 3) - as_float(row, "LAA")) * 6
-            + abs(3 - as_int(row, "FDP"))
+            abs(4 - as_int(row, "RESOLVED_ATFD"))
+            + abs((1 / 3) - as_float(row, "RESOLVED_LAA")) * 6
+            + abs(3 - as_int(row, "RESOLVED_FDP"))
         )
     if role == "project_balanced_random":
         return rows, None

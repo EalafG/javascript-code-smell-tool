@@ -82,7 +82,8 @@ const top = (value) => value?.profile?.name;`);
   assert.equal(results[1].atfd, 4);
   assert.equal(results[1].fdp, 2);
   assert.deepEqual(results[1].foreignProviders, ["unknown:customer", "unresolved:unknown:customer.address"]);
-  assert.equal(results[1].isFeatureEnvy, true);
+  assert.equal(results[1].resolvedAtfd, 0);
+  assert.equal(results[1].isFeatureEnvy, false, "unresolved receivers must not create a positive label");
   assert.equal(results[2].atfd, 2);
 });
 
@@ -126,6 +127,42 @@ function logicalChain(a, b, c, d, e) {
   assert.equal(logicalChain.isComplexConditional, false);
   assert.equal(logicalChain.isComplexConditionalSonar, true);
   assert.equal(logicalChain.isSmelly, false, "the auxiliary label must not alter the primary four-smell dataset");
+});
+
+test("keeps method complexity separate from per-condition complexity", () => {
+  const [result] = analyze(`function manySimpleConditions(a, b, c, d, e, f, g, h, i) {
+  if (a) return 1;
+  if (b) return 2;
+  if (c) return 3;
+  if (d) return 4;
+  if (e) return 5;
+  if (f) return 6;
+  if (g) return 7;
+  if (h) return 8;
+  if (i) return 9;
+  return 0;
+}`);
+
+  assert.equal(result.cyclo, 10);
+  assert.equal(result.isComplexMethod, true);
+  assert.equal(result.numConditions, 9);
+  assert.equal(result.condOpsMax, 0);
+  assert.equal(result.isComplexConditional, false);
+});
+
+test("classifies an individual condition exactly at the operator threshold", () => {
+  const [result] = analyze(`function threshold(a, b, c) {
+  return a > 0 && b > 0 || c > 0;
+}`);
+
+  assert.equal(result.condOpsMax, 0, "a return expression is not itself a condition site");
+
+  const [conditional] = analyze(`function conditionalThreshold(a, b, c) {
+  if (a > 0 && b > 0 || c > 0) return true;
+  return false;
+}`);
+  assert.equal(conditional.condOpsMax, 5);
+  assert.equal(conditional.isComplexConditional, true);
 });
 
 test("covers every documented cyclomatic decision construct", () => {
@@ -236,7 +273,7 @@ test("counts distinct inferred type/property tuples rather than repeated AST occ
   assert.deepEqual(result.couplingTuples, ["F:unknown:customer#name"]);
 });
 
-test("detects Feature Envy from many foreign properties on one inferred provider", () => {
+test("retains unresolved foreign evidence without labeling it Feature Envy", () => {
   const [result] = analyze(`function inspect(customer) {
   return customer.name + customer.age + customer.email + customer.status;
 }`);
@@ -244,7 +281,152 @@ test("detects Feature Envy from many foreign properties on one inferred provider
   assert.equal(result.atfd, 4);
   assert.equal(result.laa, 0);
   assert.equal(result.fdp, 1);
+  assert.equal(result.resolvedAtfd, 0);
+  assert.equal(result.resolvedFdp, 0);
+  assert.equal(result.feOwnerResolved, false);
+  assert.equal(result.isFeatureEnvy, false);
+});
+
+test("detects Feature Envy only from resolved foreign data in an owned non-constructor method", () => {
+  const results = analyzeProjectSources(parser, [{
+    source: `class Report {
+  summarize(customer) {
+    return customer.name + customer.age + customer.email + customer.status;
+  }
+}
+const customer = { name: "Ada", age: 37, email: "a@example.test", status: "active" };
+const report = new Report();
+report.summarize(customer);`,
+    descriptor: { project: "research-project", fileName: "report.js", relativePath: "src/report.js" },
+  }], thresholds);
+  const result = results.find((item) => item.functionName === "summarize");
+  assert.ok(result);
+  assert.equal(result.feOwnerResolved, true);
+  assert.equal(result.resolvedAtfd, 4);
+  assert.equal(result.resolvedLaa, 0);
+  assert.equal(result.resolvedFdp, 1);
   assert.equal(result.isFeatureEnvy, true);
+});
+
+test("does not label resolved standalone utilities or constructors as Feature Envy", () => {
+  const results = analyzeProjectSources(parser, [{
+    source: `function format(customer) {
+  return customer.name + customer.age + customer.email + customer.status;
+}
+class Profile {
+  constructor(customer) {
+    this.name = customer.name;
+    this.age = customer.age;
+    this.email = customer.email;
+    this.status = customer.status;
+  }
+}
+const customer = { name: "Ada", age: 37, email: "a@example.test", status: "active" };
+format(customer);
+new Profile(customer);`,
+    descriptor: { project: "research-project", fileName: "roles.js", relativePath: "src/roles.js" },
+  }], thresholds);
+  const utility = results.find((item) => item.functionName === "format");
+  const constructor = results.find((item) => item.functionName === "constructor");
+  assert.ok(utility);
+  assert.ok(constructor);
+  assert.equal(utility.resolvedAtfd, 4);
+  assert.equal(utility.feOwnerResolved, false);
+  assert.equal(utility.isFeatureEnvy, false);
+  assert.equal(utility.isConstructor, false);
+  assert.equal(constructor.resolvedAtfd, 4);
+  assert.equal(constructor.feOwnerResolved, true);
+  assert.equal(constructor.isConstructor, true);
+  assert.equal(constructor.isFeatureEnvy, false);
+});
+
+test("distinguishes an actual constructor from a static method named constructor", () => {
+  const results = analyzeProjectSources(parser, [{
+    source: `class Factory {
+  static constructor(customer) {
+    return customer.name + customer.age + customer.email + customer.status;
+  }
+}
+const customer = { name: "Ada", age: 37, email: "a@example.test", status: "active" };
+Factory.constructor(customer);`,
+    descriptor: { project: "research-project", fileName: "factory.js", relativePath: "src/factory.js" },
+  }], thresholds);
+  const result = results.find((item) => item.functionName === "constructor");
+  assert.ok(result);
+  assert.equal(result.isConstructor, false);
+  assert.equal(result.feOwnerResolved, true);
+  assert.equal(result.resolvedAtfd, 4);
+  assert.equal(result.isFeatureEnvy, true);
+});
+
+test("uses the class as the owner of a class-field arrow function", () => {
+  const results = analyzeProjectSources(parser, [{
+    source: `class Report {
+  summarize = (customer) => customer.name + customer.age + customer.email + customer.status;
+}
+const customer = { name: "Ada", age: 37, email: "a@example.test", status: "active" };
+new Report().summarize(customer);`,
+    descriptor: { project: "research-project", fileName: "report-field.js", relativePath: "src/report-field.js" },
+  }], thresholds);
+  const result = results.find((item) => item.functionName === "summarize");
+  assert.ok(result);
+  assert.equal(result.feOwnerResolved, true);
+  assert.equal(result.resolvedAtfd, 4);
+  assert.equal(result.isFeatureEnvy, true);
+});
+
+test("does not treat module and built-in constants as resolved foreign data", () => {
+  const results = analyzeProjectSources(parser, [{
+    source: `import Events from "./events.js";
+class Listener {
+  bind(target) {
+    return target.on(Events.ADD, Math.max(1, Events.PRIORITY));
+  }
+}
+new Listener().bind({ on() {} });`,
+    descriptor: { project: "research-project", fileName: "listener.js", relativePath: "src/listener.js" },
+  }], thresholds);
+  const result = results.find((item) => item.functionName === "bind");
+  assert.ok(result);
+  assert.ok(result.atfd > result.resolvedAtfd);
+  assert.equal(result.resolvedForeignProviders.some((provider) => provider.startsWith("module:")), false);
+  assert.equal(result.resolvedForeignProviders.some((provider) => provider.startsWith("builtin:")), false);
+});
+
+test("retains non-constant imported module properties as resolved providers", () => {
+  const results = analyzeProjectSources(parser, [{
+    source: `import Service from "./service.js";
+class Controller {
+  render() {
+    return Service.customer + Service.account + Service.profile + Service.settings;
+  }
+}`,
+    descriptor: { project: "research-project", fileName: "controller.js", relativePath: "src/controller.js" },
+  }], thresholds);
+  const result = results.find((item) => item.functionName === "render");
+  assert.ok(result);
+  assert.equal(result.resolvedAtfd, 4);
+  assert.deepEqual(result.resolvedForeignProviders, ["module:./service.js#default"]);
+  assert.equal(result.isFeatureEnvy, true);
+});
+
+test("keeps function-local allocation sites out of label-driving Feature Envy metrics", () => {
+  const results = analyzeProjectSources(parser, [{
+    source: `class Formatter {
+  build() {
+    const point = { x: 1, y: 2, z: 3, label: "p" };
+    const bytes = new Uint8Array(4);
+    bytes.set([point.x, point.y, point.z]);
+    return point.x + point.y + point.z + point.label + bytes.length;
+  }
+}`,
+    descriptor: { project: "research-project", fileName: "formatter.js", relativePath: "src/formatter.js" },
+  }], thresholds);
+  const result = results.find((item) => item.functionName === "build");
+  assert.ok(result);
+  assert.ok(result.atfd >= 4, "raw metrics must retain local-allocation coupling evidence");
+  assert.equal(result.resolvedAtfd, 0);
+  assert.equal(result.isFeatureEnvy, false);
 });
 
 test("uses call-site parameter flow and this-type hierarchy for locality", () => {
@@ -339,7 +521,7 @@ test("reports uncertainty separately from the smell metrics", () => {
   const [unknown] = analyze("function read(customer) { return customer.name; }");
   assert.equal(unknown.unknownAccessCount, 1);
   assert.equal(unknown.typeInferenceCoverage, 0);
-  assert.equal(unknown.feInferenceMode, "partitioned-project-static-object-type-inference-v3");
+  assert.equal(unknown.feInferenceMode, "partitioned-project-static-object-type-inference-v4");
   assert.equal(unknown.feMaxIterations, 12);
   assert.equal(unknown.feTypeSetLimit, 12);
   assert.equal(unknown.feBatchId, "P-0001");
@@ -588,6 +770,14 @@ test("exports the stable research schema and escapes CSV values", () => {
   assert.ok(CSV_HEADERS.includes("FOREIGN_MEMBER_CALLS"));
   assert.ok(CSV_HEADERS.includes("FOREIGN_CALL_PROVIDERS"));
   assert.ok(CSV_HEADERS.includes("ATD"));
+  assert.ok(CSV_HEADERS.includes("RESOLVED_ATD"));
+  assert.ok(CSV_HEADERS.includes("RESOLVED_ATFD"));
+  assert.ok(CSV_HEADERS.includes("RESOLVED_LAA"));
+  assert.ok(CSV_HEADERS.includes("RESOLVED_LAA_EXACT"));
+  assert.ok(CSV_HEADERS.includes("RESOLVED_FDP"));
+  assert.ok(CSV_HEADERS.includes("RESOLVED_FOREIGN_PROVIDERS"));
+  assert.ok(CSV_HEADERS.includes("FE_OWNER_RESOLVED"));
+  assert.ok(CSV_HEADERS.includes("IS_CONSTRUCTOR"));
   assert.ok(CSV_HEADERS.includes("LOCAL_ACCESS_COUNT"));
   assert.ok(CSV_HEADERS.includes("LAA_EXACT"));
   assert.ok(CSV_HEADERS.includes("COUPLING_TUPLES"));

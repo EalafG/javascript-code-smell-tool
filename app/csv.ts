@@ -1,8 +1,8 @@
 import { DEFAULT_THRESHOLDS } from "./analyzer.ts";
 import type { MethodResult, Thresholds } from "./analyzer.ts";
 
-export const CSV_SCHEMA_VERSION = "2.6.0";
-export const DETECTOR_VERSION = "0.7.0";
+export const CSV_SCHEMA_VERSION = "2.7.0";
+export const DETECTOR_VERSION = "0.8.0";
 
 export type ProjectGroupingMode = "single-project" | "direct-subfolders" | "cumulative-projects";
 
@@ -43,6 +43,7 @@ export const CSV_HEADERS = [
   "CODE_CATEGORY",
   "FUNCTION",
   "FUNCTION_TYPE",
+  "IS_CONSTRUCTOR",
   "START_LINE",
   "END_LINE",
   "LOC",
@@ -65,6 +66,13 @@ export const CSV_HEADERS = [
   "LAA_EXACT",
   "FDP",
   "FOREIGN_PROVIDERS",
+  "RESOLVED_ATD",
+  "RESOLVED_ATFD",
+  "RESOLVED_LAA",
+  "RESOLVED_LAA_EXACT",
+  "RESOLVED_FDP",
+  "RESOLVED_FOREIGN_PROVIDERS",
+  "FE_OWNER_RESOLVED",
   "COUPLING_TUPLES",
   "TYPE_INFERENCE_COVERAGE",
   "UNKNOWN_ACCESS_COUNT",
@@ -174,6 +182,7 @@ export function toCsv(results: MethodResult[], context: CsvExportContext = defau
       result.codeCategory,
       result.functionName,
       result.functionType,
+      Number(result.isConstructor),
       result.startLine,
       result.endLine,
       result.loc,
@@ -196,6 +205,13 @@ export function toCsv(results: MethodResult[], context: CsvExportContext = defau
       result.atd === 0 ? "1/1" : `${result.localAccessCount}/${result.atd}`,
       result.fdp,
       result.foreignProviders.join("|"),
+      result.resolvedAtd,
+      result.resolvedAtfd,
+      result.resolvedLaa.toFixed(10),
+      result.resolvedAtd === 0 ? "1/1" : `${result.localAccessCount}/${result.resolvedAtd}`,
+      result.resolvedFdp,
+      result.resolvedForeignProviders.join("|"),
+      Number(result.feOwnerResolved),
       result.couplingTuples.join("|"),
       result.typeInferenceCoverage.toFixed(4),
       result.unknownAccessCount,

@@ -12,8 +12,10 @@ import type {
   Decision,
   DecisionMap,
   DecisionTimeMap,
+  IneligibilityReason,
   JavaScriptExperience,
   PilotPayload,
+  SampleDisposition,
   SmellKey,
   ValidationSample,
   ValidatorDeclaration,
@@ -59,6 +61,14 @@ const DECISIONS: Array<{ value: Decision; label: string }> = [
   { value: "uncertain", label: "Uncertain" },
 ];
 
+const INELIGIBILITY_REASONS: Array<{ value: IneligibilityReason; label: string }> = [
+  { value: "third_party_or_generated", label: "Third-party, generated, or bundled code" },
+  { value: "incomplete_or_incorrect_segment", label: "Incomplete or incorrect code segment" },
+  { value: "essential_context_unavailable", label: "Essential surrounding context is unavailable" },
+  { value: "parse_or_display_problem", label: "Parse or display problem" },
+  { value: "other", label: "Other sample problem" },
+];
+
 const LOCAL_VALIDATOR_KEY = "upm-validation:validator-id";
 const DECLARATION_VERSION = "1.0.0";
 
@@ -77,7 +87,7 @@ const DECLARATION_AGREEMENTS = [
   },
   {
     id: "uncertainty-rule",
-    text: "I will select Uncertain and provide a short reason when the evidence is balanced or essential context is missing.",
+    text: "I will use Uncertain only for a smell-level borderline judgment and report whole-sample eligibility problems separately.",
   },
   {
     id: "voluntary-participation",
@@ -110,8 +120,8 @@ function asset(fileName: string) {
   return new URL(`../${fileName}`, window.location.href).toString();
 }
 
-function csvEscape(value: string | number) {
-  const text = String(value);
+function csvEscape(value: unknown) {
+  const text = String(value ?? "");
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
@@ -128,6 +138,9 @@ function exportAnnotations(records: AnnotationRecord[]) {
     "CODE_REVIEW_FREQUENCY",
     "CODE_SMELL_FAMILIARITY",
     "REVISION",
+    "SAMPLE_DISPOSITION",
+    "INELIGIBILITY_REASON",
+    "INELIGIBILITY_DETAILS",
     "LONG_METHOD",
     "COMPLEX_METHOD",
     "COMPLEX_CONDITIONAL",
@@ -154,6 +167,9 @@ function exportAnnotations(records: AnnotationRecord[]) {
     record.declaration?.codeReviewFrequency ?? "",
     record.declaration?.codeSmellFamiliarity ?? "",
     record.revision,
+    record.sampleDisposition ?? "eligible",
+    record.ineligibilityReason ?? "",
+    record.ineligibilityDetails ?? "",
     record.decisions.longMethod,
     record.decisions.complexMethod,
     record.decisions.complexConditional,
@@ -610,8 +626,11 @@ type WorkspaceProps = {
   records: AnnotationRecord[];
   datasetSha256: string;
   onSubmit: (sample: ValidationSample, draft: {
-    decisions: Record<SmellKey, Decision>;
-    decisionTimes: Record<SmellKey, string>;
+    sampleDisposition: SampleDisposition;
+    ineligibilityReason: IneligibilityReason | "";
+    ineligibilityDetails: string;
+    decisions: DecisionMap;
+    decisionTimes: DecisionTimeMap;
     notes: string;
     startedAt: string;
   }) => Promise<void>;
@@ -636,6 +655,9 @@ function Workspace({
   const [search, setSearch] = useState("");
   const [decisions, setDecisions] = useState<DecisionMap>({ ...EMPTY_DECISIONS });
   const [decisionTimes, setDecisionTimes] = useState<DecisionTimeMap>({});
+  const [sampleDisposition, setSampleDisposition] = useState<SampleDisposition>("eligible");
+  const [ineligibilityReason, setIneligibilityReason] = useState<IneligibilityReason | "">("");
+  const [ineligibilityDetails, setIneligibilityDetails] = useState("");
   const [notes, setNotes] = useState("");
   const [startedAt, setStartedAt] = useState(() => new Date().toISOString());
   const [submitting, setSubmitting] = useState(false);
@@ -646,6 +668,9 @@ function Workspace({
   function resetDraft() {
     setDecisions({ ...EMPTY_DECISIONS });
     setDecisionTimes({});
+    setSampleDisposition("eligible");
+    setIneligibilityReason("");
+    setIneligibilityDetails("");
     setNotes("");
     setStartedAt(new Date().toISOString());
     setMessage("");
@@ -666,11 +691,22 @@ function Workspace({
 
   const allDecided = SMELLS.every(({ key }) => decisions[key]);
   const hasUncertain = SMELLS.some(({ key }) => decisions[key] === "uncertain");
-  const canSubmit = allDecided && (!hasUncertain || notes.trim().length > 0) && !submitting;
+  const isIneligible = sampleDisposition === "ineligible";
+  const ineligibilityComplete = Boolean(ineligibilityReason) && (ineligibilityReason !== "other" || ineligibilityDetails.trim().length > 0);
+  const canSubmit = (isIneligible ? ineligibilityComplete : allDecided && (!hasUncertain || notes.trim().length > 0)) && !submitting;
 
   function chooseDecision(key: SmellKey, value: Decision) {
     setDecisions((current) => ({ ...current, [key]: value }));
     setDecisionTimes((current) => ({ ...current, [key]: new Date().toISOString() }));
+  }
+
+  function setSampleIneligible(value: boolean) {
+    setSampleDisposition(value ? "ineligible" : "eligible");
+    setDecisions({ ...EMPTY_DECISIONS });
+    setDecisionTimes({});
+    setIneligibilityReason("");
+    setIneligibilityDetails("");
+    setNotes("");
   }
 
   function chooseSample(sample: ValidationSample) {
@@ -688,8 +724,11 @@ function Workspace({
     setMessage("");
     try {
       await onSubmit(activeSample, {
-        decisions: decisions as Record<SmellKey, Decision>,
-        decisionTimes: decisionTimes as Record<SmellKey, string>,
+        sampleDisposition,
+        ineligibilityReason,
+        ineligibilityDetails: ineligibilityDetails.trim(),
+        decisions,
+        decisionTimes,
         notes: notes.trim(),
         startedAt,
       });
@@ -802,46 +841,73 @@ function Workspace({
 
         <aside className="annotation-card" aria-label="Smell decisions">
           <div className="annotation-card__heading">
-            <div><p className="kicker">YOUR JUDGMENT</p><h2>Four independent decisions</h2></div>
-            <span>{SMELLS.filter(({ key }) => decisions[key]).length}/4</span>
+            <div><p className="kicker">YOUR JUDGMENT</p><h2>{isIneligible ? "Sample eligibility" : "Four independent decisions"}</h2></div>
+            <span>{isIneligible ? "ISSUE" : `${SMELLS.filter(({ key }) => decisions[key]).length}/4`}</span>
           </div>
-          <p className="annotation-intro">Select Present, Absent, or Uncertain for each smell.</p>
-          <div className="smell-list">
-            {SMELLS.map((smell, index) => (
-              <fieldset className="smell-decision" key={smell.key}>
-                <legend><span>{index + 1}</span>{smell.label}</legend>
-                <p>{smell.cue}</p>
-                <div className="decision-buttons">
-                  {DECISIONS.map((choice) => (
-                    <button
-                      type="button"
-                      className={`decision decision--${choice.value} ${decisions[smell.key] === choice.value ? "is-selected" : ""}`}
-                      aria-pressed={decisions[smell.key] === choice.value}
-                      onClick={() => chooseDecision(smell.key, choice.value)}
-                      key={choice.value}
-                    >
-                      {choice.label}
-                    </button>
-                  ))}
-                </div>
-              </fieldset>
-            ))}
+          <p className="annotation-intro">Select Present, Absent, or Uncertain for each smell. Use the sample-issue option only when the code itself cannot be validly reviewed.</p>
+
+          <div className={`sample-issue-toggle ${isIneligible ? "is-selected" : ""}`}>
+            <input id="sample-ineligible" type="checkbox" checked={isIneligible} onChange={(event) => setSampleIneligible(event.target.checked)} />
+            <label htmlFor="sample-ineligible"><strong>Report sample as ineligible</strong><small>For third-party/generated code, a broken segment, missing essential context, or a display problem.</small></label>
           </div>
 
-          <label className="notes-field">
-            <span>Reasoning note {hasUncertain ? <strong>Required for Uncertain</strong> : <small>Optional</small>}</span>
-            <textarea
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              placeholder="Record the evidence or missing context…"
-              rows={3}
-            />
-          </label>
+          {isIneligible ? (
+            <div className="sample-issue-form">
+              <label>
+                <span>Reason <strong>Required</strong></span>
+                <select value={ineligibilityReason} onChange={(event) => setIneligibilityReason(event.target.value as IneligibilityReason | "")}>
+                  <option value="">Select a reason</option>
+                  {INELIGIBILITY_REASONS.map((reason) => <option value={reason.value} key={reason.value}>{reason.label}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Details {ineligibilityReason === "other" ? <strong>Required</strong> : <small>Optional</small>}</span>
+                <textarea value={ineligibilityDetails} onChange={(event) => setIneligibilityDetails(event.target.value)} placeholder="Describe the sample problem without judging the smells." rows={4} />
+              </label>
+              <p>This report will be retained in the audit log and excluded from smell consensus, agreement, and detector-performance metrics.</p>
+            </div>
+          ) : (
+            <>
+              <div className="smell-list">
+                {SMELLS.map((smell, index) => (
+                  <fieldset className="smell-decision" key={smell.key}>
+                    <legend><span>{index + 1}</span>{smell.label}</legend>
+                    <p>{smell.cue}</p>
+                    <div className="decision-buttons">
+                      {DECISIONS.map((choice) => (
+                        <button
+                          type="button"
+                          className={`decision decision--${choice.value} ${decisions[smell.key] === choice.value ? "is-selected" : ""}`}
+                          aria-pressed={decisions[smell.key] === choice.value}
+                          onClick={() => chooseDecision(smell.key, choice.value)}
+                          key={choice.value}
+                        >
+                          {choice.label}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+                ))}
+              </div>
+
+              <label className="notes-field">
+                <span>Reasoning note {hasUncertain ? <strong>Required for Uncertain</strong> : <small>Optional</small>}</span>
+                <textarea
+                  value={notes}
+                  onChange={(event) => setNotes(event.target.value)}
+                  placeholder="Record the evidence or explain why one smell is borderline…"
+                  rows={3}
+                />
+              </label>
+            </>
+          )}
           <button className="button button--primary submit-button" type="button" disabled={!canSubmit} onClick={submitCurrent}>
             {submitting ? "Saving…" : completedSampleIds.has(activeSample?.sampleId ?? "") ? "Submit new revision" : "Submit and continue"}
           </button>
-          {!allDecided && <p className="form-hint">Complete all four decisions to submit.</p>}
-          {hasUncertain && !notes.trim() && <p className="form-hint">Explain what context is missing.</p>}
+          {isIneligible && !ineligibilityReason && <p className="form-hint">Select why this sample cannot be reviewed.</p>}
+          {isIneligible && ineligibilityReason === "other" && !ineligibilityDetails.trim() && <p className="form-hint">Describe the sample problem.</p>}
+          {!isIneligible && !allDecided && <p className="form-hint">Complete all four decisions to submit.</p>}
+          {!isIneligible && hasUncertain && !notes.trim() && <p className="form-hint">Explain why the smell-level evidence is borderline.</p>}
           {message && <p className="save-message" role="status">{message}</p>}
         </aside>
       </main>
@@ -856,7 +922,7 @@ function Workspace({
           <button className="dialog-scrim" type="button" aria-label="Close guideline" onClick={() => setGuidelineOpen(false)} />
           <section className="guideline-dialog" role="dialog" aria-modal="true" aria-labelledby="guideline-title">
             <div className="dialog-heading">
-              <div><p className="kicker">PILOT PROTOCOL 1.0.0</p><h2 id="guideline-title">Decision reminders</h2></div>
+              <div><p className="kicker">ANNOTATION GUIDELINE 1.1.0</p><h2 id="guideline-title">Decision reminders</h2></div>
               <button className="button button--quiet" type="button" onClick={() => setGuidelineOpen(false)}>Close</button>
             </div>
             <div className="guideline-grid">
@@ -865,7 +931,8 @@ function Workspace({
             <div className="decision-guide">
               <p><strong>Present</strong> — sufficient evidence that the smell exists.</p>
               <p><strong>Absent</strong> — sufficient evidence that it does not.</p>
-              <p><strong>Uncertain</strong> — essential context is missing or the evidence is genuinely balanced; explain why.</p>
+              <p><strong>Uncertain</strong> — the sample is reviewable, but the evidence for this smell is genuinely balanced; explain why.</p>
+              <p><strong>Ineligible sample</strong> — the entire sample cannot be validly reviewed; report it separately instead of selecting four Uncertain decisions.</p>
             </div>
             <p className="dialog-note">Nested functions are separate units. Do not count their control flow or foreign accesses as part of the displayed parent.</p>
           </section>
@@ -967,14 +1034,20 @@ function HostedApp({ client }: { client: SupabaseClient }) {
   const datasetSha256 = samples[0]?.datasetSha256 ?? "hosted-study";
 
   async function submit(sample: ValidationSample, draft: {
-    decisions: Record<SmellKey, Decision>;
-    decisionTimes: Record<SmellKey, string>;
+    sampleDisposition: SampleDisposition;
+    ineligibilityReason: IneligibilityReason | "";
+    ineligibilityDetails: string;
+    decisions: DecisionMap;
+    decisionTimes: DecisionTimeMap;
     notes: string;
     startedAt: string;
   }) {
     if (!sample.assignmentId) throw new Error("This method has no assignment identifier.");
-    const { error } = await client.rpc("submit_annotation", {
+    const { error: currentError } = await client.rpc("submit_annotation_v2", {
       p_assignment_id: sample.assignmentId,
+      p_sample_disposition: draft.sampleDisposition,
+      p_ineligibility_reason: draft.ineligibilityReason || null,
+      p_ineligibility_details: draft.ineligibilityDetails || null,
       p_long_method: draft.decisions.longMethod,
       p_complex_method: draft.decisions.complexMethod,
       p_complex_conditional: draft.decisions.complexConditional,
@@ -983,7 +1056,26 @@ function HostedApp({ client }: { client: SupabaseClient }) {
       p_decision_times: draft.decisionTimes,
       p_client_started_at: draft.startedAt,
     });
-    if (error) throw error;
+    let error = currentError;
+    if (error && draft.sampleDisposition === "eligible" && (error.code === "PGRST202" || error.message.includes("submit_annotation_v2"))) {
+      const legacy = await client.rpc("submit_annotation", {
+        p_assignment_id: sample.assignmentId,
+        p_long_method: draft.decisions.longMethod,
+        p_complex_method: draft.decisions.complexMethod,
+        p_complex_conditional: draft.decisions.complexConditional,
+        p_feature_envy: draft.decisions.featureEnvy,
+        p_notes: draft.notes || null,
+        p_decision_times: draft.decisionTimes,
+        p_client_started_at: draft.startedAt,
+      });
+      error = legacy.error;
+    }
+    if (error) {
+      if (draft.sampleDisposition === "ineligible" && (error.code === "PGRST202" || error.message.includes("submit_annotation_v2"))) {
+        throw new Error("The hosted study database must be updated before sample-issue reports can be submitted.");
+      }
+      throw error;
+    }
     setSamples((current) => current.map((item) => item.sampleId === sample.sampleId ? { ...item, status: "completed" } : item));
   }
 
@@ -1035,8 +1127,11 @@ function LocalApp() {
   const completedIds = new Set(latestBySample.keys());
 
   async function submit(sample: ValidationSample, draft: {
-    decisions: Record<SmellKey, Decision>;
-    decisionTimes: Record<SmellKey, string>;
+    sampleDisposition: SampleDisposition;
+    ineligibilityReason: IneligibilityReason | "";
+    ineligibilityDetails: string;
+    decisions: DecisionMap;
+    decisionTimes: DecisionTimeMap;
     notes: string;
     startedAt: string;
   }) {
@@ -1050,6 +1145,9 @@ function LocalApp() {
       datasetSha256: activePayload.study.datasetSha256,
       declaration: activeDeclaration,
       revision,
+      sampleDisposition: draft.sampleDisposition,
+      ineligibilityReason: draft.ineligibilityReason,
+      ineligibilityDetails: draft.ineligibilityDetails,
       decisions: draft.decisions,
       decisionTimes: draft.decisionTimes,
       notes: draft.notes,

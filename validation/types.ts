@@ -1,5 +1,14 @@
 export type Decision = "present" | "absent" | "uncertain";
 
+export type SampleDisposition = "eligible" | "ineligible";
+
+export type IneligibilityReason =
+  | "third_party_or_generated"
+  | "incomplete_or_incorrect_segment"
+  | "essential_context_unavailable"
+  | "parse_or_display_problem"
+  | "other";
+
 export type SmellKey =
   | "longMethod"
   | "complexMethod"
@@ -64,8 +73,11 @@ export type AnnotationRecord = {
   datasetSha256: string;
   declaration?: ValidatorDeclaration;
   revision: number;
-  decisions: Record<SmellKey, Decision>;
-  decisionTimes: Record<SmellKey, string>;
+  sampleDisposition: SampleDisposition;
+  ineligibilityReason: IneligibilityReason | "";
+  ineligibilityDetails: string;
+  decisions: DecisionMap;
+  decisionTimes: DecisionTimeMap;
   notes: string;
   startedAt: string;
   submittedAt: string;

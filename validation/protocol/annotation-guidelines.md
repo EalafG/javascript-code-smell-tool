@@ -1,4 +1,4 @@
-# Annotation Guideline — Version 1.0.0 (Pilot)
+# Annotation Guideline — Version 1.1.0 (Eligibility Addendum)
 
 ## Before annotation
 
@@ -31,12 +31,21 @@ automatically complex.
   present in the displayed method.
 - **Absent** — the evidence is sufficient to conclude that the smell is not
   present.
-- **Uncertain / insufficient context** — a defensible judgment cannot be made
-  because context is missing, syntax is unfamiliar/ambiguous, generated code
-  slipped into the sample, or the evidence is genuinely balanced.
+- **Uncertain** — the sample is eligible for review, but the evidence for one
+  smell is genuinely balanced or smell-specific context is insufficient.
 
 `Uncertain` is not a midpoint between clean and smelly and must not be used as
-an easy default. Add a short note explaining what information is missing.
+an easy default. Add a short note explaining why the smell-level evidence is
+borderline.
+
+If the entire sample cannot be validly reviewed, use **Report sample as
+ineligible** instead of selecting Uncertain four times. Choose one reason:
+third-party/generated/bundled code, incomplete or incorrect segment, essential
+surrounding context unavailable, parse/display problem, or other. An Other
+report requires details. Ineligible reports remain in the audit log, but are
+excluded from smell consensus, inter-rater agreement, and detector-performance
+metrics. The research team should inspect these reports and, where appropriate,
+draw deterministic replacements before freezing the final analysis set.
 
 ## General decision process
 
@@ -44,7 +53,8 @@ an easy default. Add a short note explaining what information is missing.
 2. Identify its main responsibility and control-flow structure.
 3. Inspect each condition as an expression, then inspect the method as a whole.
 4. Identify accesses to `this` and to foreign object/provider roots.
-5. Record all four decisions before submitting.
+5. If the whole sample is invalid, report it as ineligible and stop. Otherwise,
+   record all four smell decisions before submitting.
 
 Detector metrics, thresholds, sampling strata, and predicted labels are hidden
 during this process. Do not calculate the detector rule mechanically or inspect

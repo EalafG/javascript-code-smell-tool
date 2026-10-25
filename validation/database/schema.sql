@@ -108,16 +108,46 @@ create table public.annotations (
   validator_id uuid not null references public.profiles(id) on delete restrict,
   revision integer not null check (revision > 0),
   phase public.annotation_phase not null default 'blind',
-  long_method public.annotation_decision not null,
-  complex_method public.annotation_decision not null,
-  complex_conditional public.annotation_decision not null,
-  feature_envy public.annotation_decision not null,
+  sample_disposition text not null default 'eligible'
+    check (sample_disposition in ('eligible', 'ineligible')),
+  ineligibility_reason text
+    check (ineligibility_reason is null or ineligibility_reason in (
+      'third_party_or_generated',
+      'incomplete_or_incorrect_segment',
+      'essential_context_unavailable',
+      'parse_or_display_problem',
+      'other'
+    )),
+  ineligibility_details text,
+  long_method public.annotation_decision,
+  complex_method public.annotation_decision,
+  complex_conditional public.annotation_decision,
+  feature_envy public.annotation_decision,
   notes text,
   decision_times jsonb not null default '{}'::jsonb,
   client_started_at timestamptz not null,
   submitted_at timestamptz not null default now(),
   duration_seconds numeric not null check (duration_seconds >= 0),
-  unique (assignment_id, revision)
+  unique (assignment_id, revision),
+  check (
+    (sample_disposition = 'eligible'
+      and ineligibility_reason is null
+      and long_method is not null
+      and complex_method is not null
+      and complex_conditional is not null
+      and feature_envy is not null)
+    or
+    (sample_disposition = 'ineligible'
+      and ineligibility_reason is not null
+      and long_method is null
+      and complex_method is null
+      and complex_conditional is null
+      and feature_envy is null)
+  ),
+  check (
+    ineligibility_reason <> 'other'
+    or nullif(btrim(coalesce(ineligibility_details, '')), '') is not null
+  )
 );
 
 create table public.annotation_events (
@@ -455,6 +485,146 @@ begin
 end;
 $$;
 
+create or replace function public.submit_annotation_v2(
+  p_assignment_id uuid,
+  p_sample_disposition text,
+  p_ineligibility_reason text,
+  p_ineligibility_details text,
+  p_long_method public.annotation_decision,
+  p_complex_method public.annotation_decision,
+  p_complex_conditional public.annotation_decision,
+  p_feature_envy public.annotation_decision,
+  p_notes text,
+  p_decision_times jsonb,
+  p_client_started_at timestamptz
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_assignment public.assignments%rowtype;
+  v_revision integer;
+  v_annotation_id uuid;
+  v_submitted_at timestamptz := now();
+begin
+  select * into v_assignment
+  from public.assignments
+  where id = p_assignment_id and validator_id = auth.uid()
+  for update;
+
+  if not found then
+    raise exception 'Assignment is unavailable';
+  end if;
+  if not exists (
+    select 1
+    from public.validator_declarations
+    where validator_id = auth.uid() and declaration_version = '1.0.0'
+  ) then
+    raise exception 'The current validator declaration is required before annotation';
+  end if;
+  if p_sample_disposition not in ('eligible', 'ineligible') then
+    raise exception 'Sample disposition must be eligible or ineligible';
+  end if;
+  if p_sample_disposition = 'eligible' and (
+    p_long_method is null
+    or p_complex_method is null
+    or p_complex_conditional is null
+    or p_feature_envy is null
+  ) then
+    raise exception 'All four smell decisions are required for an eligible sample';
+  end if;
+  if p_sample_disposition = 'ineligible' and (
+    p_ineligibility_reason is null
+    or p_ineligibility_reason not in (
+      'third_party_or_generated',
+      'incomplete_or_incorrect_segment',
+      'essential_context_unavailable',
+      'parse_or_display_problem',
+      'other'
+    )
+    or p_long_method is not null
+    or p_complex_method is not null
+    or p_complex_conditional is not null
+    or p_feature_envy is not null
+  ) then
+    raise exception 'An ineligible sample requires a valid reason and no smell decisions';
+  end if;
+  if p_ineligibility_reason = 'other'
+    and nullif(btrim(coalesce(p_ineligibility_details, '')), '') is null then
+    raise exception 'Details are required for an Other sample problem';
+  end if;
+  if p_sample_disposition = 'eligible' and (
+    p_long_method = 'uncertain'
+    or p_complex_method = 'uncertain'
+    or p_complex_conditional = 'uncertain'
+    or p_feature_envy = 'uncertain'
+  ) and nullif(btrim(coalesce(p_notes, '')), '') is null then
+    raise exception 'A note is required when any decision is uncertain';
+  end if;
+
+  select coalesce(max(revision), 0) + 1 into v_revision
+  from public.annotations where assignment_id = p_assignment_id;
+
+  insert into public.annotations (
+    assignment_id,
+    validator_id,
+    revision,
+    phase,
+    sample_disposition,
+    ineligibility_reason,
+    ineligibility_details,
+    long_method,
+    complex_method,
+    complex_conditional,
+    feature_envy,
+    notes,
+    decision_times,
+    client_started_at,
+    submitted_at,
+    duration_seconds
+  ) values (
+    p_assignment_id,
+    auth.uid(),
+    v_revision,
+    'blind',
+    p_sample_disposition,
+    case when p_sample_disposition = 'ineligible' then p_ineligibility_reason else null end,
+    case when p_sample_disposition = 'ineligible' then nullif(btrim(coalesce(p_ineligibility_details, '')), '') else null end,
+    p_long_method,
+    p_complex_method,
+    p_complex_conditional,
+    p_feature_envy,
+    case when p_sample_disposition = 'eligible' then nullif(btrim(coalesce(p_notes, '')), '') else null end,
+    coalesce(p_decision_times, '{}'::jsonb),
+    p_client_started_at,
+    v_submitted_at,
+    greatest(0, extract(epoch from (v_submitted_at - p_client_started_at)))
+  ) returning id into v_annotation_id;
+
+  update public.assignments
+  set status = 'completed', submitted_at = v_submitted_at
+  where id = p_assignment_id;
+
+  insert into public.annotation_events (
+    assignment_id, validator_id, event_type, event_at, payload
+  ) values (
+    p_assignment_id,
+    auth.uid(),
+    case when v_revision = 1 then 'submitted' else 'revised' end,
+    v_submitted_at,
+    jsonb_build_object(
+      'annotation_id', v_annotation_id,
+      'revision', v_revision,
+      'sample_disposition', p_sample_disposition
+    )
+  );
+
+  return v_annotation_id;
+end;
+$$;
+
 revoke all on function public.accept_validator_declaration(
   text,
   text,
@@ -466,6 +636,19 @@ revoke all on function public.accept_validator_declaration(
 revoke all on function public.open_assignment(uuid) from public, anon;
 revoke all on function public.submit_annotation(
   uuid,
+  public.annotation_decision,
+  public.annotation_decision,
+  public.annotation_decision,
+  public.annotation_decision,
+  text,
+  jsonb,
+  timestamptz
+) from public, anon;
+revoke all on function public.submit_annotation_v2(
+  uuid,
+  text,
+  text,
+  text,
   public.annotation_decision,
   public.annotation_decision,
   public.annotation_decision,
@@ -487,6 +670,19 @@ grant execute on function public.accept_validator_declaration(
 grant execute on function public.open_assignment(uuid) to authenticated;
 grant execute on function public.submit_annotation(
   uuid,
+  public.annotation_decision,
+  public.annotation_decision,
+  public.annotation_decision,
+  public.annotation_decision,
+  text,
+  jsonb,
+  timestamptz
+) to authenticated;
+grant execute on function public.submit_annotation_v2(
+  uuid,
+  text,
+  text,
+  text,
   public.annotation_decision,
   public.annotation_decision,
   public.annotation_decision,
@@ -528,6 +724,9 @@ select
   vd.code_smell_familiarity,
   an.revision,
   an.phase,
+  an.sample_disposition,
+  an.ineligibility_reason,
+  an.ineligibility_details,
   an.long_method,
   an.complex_method,
   an.complex_conditional,

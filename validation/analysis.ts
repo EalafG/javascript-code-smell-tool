@@ -1,4 +1,4 @@
-import type { Decision, SmellKey } from "./types";
+import type { Decision, DecisionMap, IneligibilityReason, SampleDisposition, SmellKey } from "./types";
 
 export const ANALYSIS_SMELLS: Array<{
   key: SmellKey;
@@ -20,7 +20,10 @@ export type ImportedAnnotation = {
   datasetMethodId: string;
   datasetSha256: string;
   revision: number;
-  decisions: Record<SmellKey, Decision>;
+  sampleDisposition: SampleDisposition;
+  ineligibilityReason: IneligibilityReason | "";
+  ineligibilityDetails: string;
+  decisions: DecisionMap;
   notes: string;
   submittedAt: string;
   durationSeconds: number | null;
@@ -65,6 +68,7 @@ export type BinaryMetrics = {
   fn: number;
   uncertain: number;
   ties: number;
+  ineligible: number;
   evaluated: number;
   accuracy: number | null;
   precision: number | null;
@@ -123,10 +127,32 @@ export function parseCsv(text: string): Array<Record<string, string>> {
   return rows.slice(1).map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""])));
 }
 
-function decision(value: string, column: string, rowNumber: number): Decision {
+function decision(value: string, column: string, rowNumber: number, required: boolean): Decision | null {
   const normalized = value.trim().toLowerCase();
   if (normalized === "present" || normalized === "absent" || normalized === "uncertain") return normalized;
+  if (!required && !normalized) return null;
   throw new Error(`Row ${rowNumber}: ${column} must be Present, Absent, or Uncertain.`);
+}
+
+const INELIGIBILITY_REASONS = new Set<IneligibilityReason>([
+  "third_party_or_generated",
+  "incomplete_or_incorrect_segment",
+  "essential_context_unavailable",
+  "parse_or_display_problem",
+  "other",
+]);
+
+function sampleDisposition(value: string | undefined, rowNumber: number): SampleDisposition {
+  const normalized = (value || "eligible").trim().toLowerCase();
+  if (normalized === "eligible" || normalized === "ineligible") return normalized;
+  throw new Error(`Row ${rowNumber}: SAMPLE_DISPOSITION must be Eligible or Ineligible.`);
+}
+
+function ineligibilityReason(value: string | undefined, disposition: SampleDisposition, rowNumber: number): IneligibilityReason | "" {
+  const normalized = (value || "").trim().toLowerCase() as IneligibilityReason | "";
+  if (disposition === "eligible") return "";
+  if (INELIGIBILITY_REASONS.has(normalized as IneligibilityReason)) return normalized;
+  throw new Error(`Row ${rowNumber}: an Ineligible sample requires a valid INELIGIBILITY_REASON.`);
 }
 
 function numberOrNull(value: string | undefined): number | null {
@@ -146,22 +172,33 @@ export function parseAnnotationCsv(text: string, sourceFile: string): ImportedAn
   for (const column of required) {
     if (!(column in rows[0])) throw new Error(`${sourceFile}: missing required column ${column}.`);
   }
-  return rows.map((row, index) => ({
-    sourceFile,
-    annotationId: row.ANNOTATION_ID || `${sourceFile}:${index + 2}`,
-    validatorId: row.VALIDATOR_ID.trim(),
-    sampleId: row.SAMPLE_ID.trim(),
-    datasetMethodId: (row.DATASET_METHOD_ID || row.SAMPLE_ID).trim(),
-    datasetSha256: (row.DATASET_SHA256 || "").trim(),
-    revision: Math.max(1, Number(row.REVISION) || 1),
-    decisions: Object.fromEntries(ANALYSIS_SMELLS.map((smell) => [
-      smell.key,
-      decision(row[smell.annotationColumn], smell.annotationColumn, index + 2),
-    ])) as Record<SmellKey, Decision>,
-    notes: row.NOTES || "",
-    submittedAt: row.SUBMITTED_AT || "",
-    durationSeconds: numberOrNull(row.DURATION_SECONDS),
-  }));
+  return rows.map((row, index) => {
+    const disposition = sampleDisposition(row.SAMPLE_DISPOSITION, index + 2);
+    const reason = ineligibilityReason(row.INELIGIBILITY_REASON, disposition, index + 2);
+    const details = row.INELIGIBILITY_DETAILS || "";
+    if (reason === "other" && !details.trim()) {
+      throw new Error(`Row ${index + 2}: INELIGIBILITY_DETAILS is required when the reason is Other.`);
+    }
+    return {
+      sourceFile,
+      annotationId: row.ANNOTATION_ID || `${sourceFile}:${index + 2}`,
+      validatorId: row.VALIDATOR_ID.trim(),
+      sampleId: row.SAMPLE_ID.trim(),
+      datasetMethodId: (row.DATASET_METHOD_ID || row.SAMPLE_ID).trim(),
+      datasetSha256: (row.DATASET_SHA256 || "").trim(),
+      revision: Math.max(1, Number(row.REVISION) || 1),
+      sampleDisposition: disposition,
+      ineligibilityReason: reason,
+      ineligibilityDetails: details,
+      decisions: Object.fromEntries(ANALYSIS_SMELLS.map((smell) => [
+        smell.key,
+        decision(row[smell.annotationColumn], smell.annotationColumn, index + 2, disposition === "eligible"),
+      ])) as DecisionMap,
+      notes: row.NOTES || "",
+      submittedAt: row.SUBMITTED_AT || "",
+      durationSeconds: numberOrNull(row.DURATION_SECONDS),
+    };
+  });
 }
 
 export function parseReferenceCsv(text: string, sourceFile: string): DetectorReference[] {
@@ -233,6 +270,7 @@ export function buildComparisons(
     const sampleId = rows[0].sampleId;
     const datasetSha256 = rows[0].datasetSha256;
     const reference = referenceByDatasetSample.get(`${datasetSha256}\u0000${sampleId}`) ?? referenceBySample.get(sampleId) ?? referenceByMethod.get(rows[0].datasetMethodId) ?? null;
+    const eligibleRows = rows.filter((row) => row.sampleDisposition === "eligible");
     return {
       sampleId,
       datasetSha256,
@@ -241,7 +279,7 @@ export function buildComparisons(
       annotations: rows.sort((a, b) => a.validatorId.localeCompare(b.validatorId)),
       consensus: Object.fromEntries(ANALYSIS_SMELLS.map((smell) => [
         smell.key,
-        consensusFor(rows.map((row) => row.decisions[smell.key])),
+        consensusFor(eligibleRows.map((row) => row.decisions[smell.key]).filter((value): value is Decision => value !== null)),
       ])) as Record<SmellKey, Decision | "tie" | null>,
     };
   }).sort((a, b) => a.datasetSha256.localeCompare(b.datasetSha256) || a.sampleId.localeCompare(b.sampleId, undefined, { numeric: true }));
@@ -252,9 +290,10 @@ function ratio(numerator: number, denominator: number): number | null {
 }
 
 export function binaryMetrics(comparisons: MethodComparison[], smell: SmellKey): BinaryMetrics {
-  let tp = 0; let tn = 0; let fp = 0; let fn = 0; let uncertain = 0; let ties = 0;
+  let tp = 0; let tn = 0; let fp = 0; let fn = 0; let uncertain = 0; let ties = 0; let ineligible = 0;
   for (const method of comparisons) {
     if (!method.reference) continue;
+    if (!method.annotations.some((row) => row.sampleDisposition === "eligible")) { ineligible += 1; continue; }
     const consensus = method.consensus[smell];
     if (consensus === "uncertain" || consensus === null) { uncertain += 1; continue; }
     if (consensus === "tie") { ties += 1; continue; }
@@ -271,7 +310,7 @@ export function binaryMetrics(comparisons: MethodComparison[], smell: SmellKey):
   const specificity = ratio(tn, tn + fp);
   const denominator = Math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn));
   return {
-    tp, tn, fp, fn, uncertain, ties, evaluated,
+    tp, tn, fp, fn, uncertain, ties, ineligible, evaluated,
     accuracy: ratio(tp + tn, evaluated),
     precision,
     recall,
@@ -284,7 +323,10 @@ export function binaryMetrics(comparisons: MethodComparison[], smell: SmellKey):
 
 export function agreementMetrics(comparisons: MethodComparison[], smell: SmellKey): AgreementMetrics {
   const units = comparisons
-    .map((method) => method.annotations.map((row) => row.decisions[smell]))
+    .map((method) => method.annotations
+      .filter((row) => row.sampleDisposition === "eligible")
+      .map((row) => row.decisions[smell])
+      .filter((value): value is Decision => value !== null))
     .filter((ratings) => ratings.length >= 2);
   const categories: Decision[] = ["present", "absent", "uncertain"];
   let agreeingPairs = 0;

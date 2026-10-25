@@ -1100,12 +1100,13 @@ export default function Home() {
             <article className="rule-card">
               <div className="rule-card__top"><span>FE</span><small>Data locality</small></div>
               <h3>Feature Envy</h3>
-              <p className="formula">ATFD &gt; FEW ∧ LAA &lt; ⅓ ∧ FDP ≤ FEW</p>
+              <p className="formula">Owner resolved ∧ not constructor ∧ RATFD &gt; FEW ∧ RLAA &lt; ⅓ ∧ RFDP ≤ FEW</p>
               <ThresholdInput label="FEW" value={thresholds.few} onChange={(few) => setThresholds((value) => ({ ...value, few }))} />
-              <p className="rule-note">Type-aware data locality in bounded project partitions.</p>
+              <p className="rule-note">Resolved data locality for non-constructor methods with a recoverable owner.</p>
               <details className="methodology-details">
                 <summary>Inference methodology</summary>
-                <p>Paper-inspired static object-type inference uses deterministic project partitions of at most 100 files or 512 KiB of source. ATD/ATFD use distinct type-property tuples; member calls are included, array indices become <code>IDX</code>, and nested functions remain independent.</p>
+                <p>Paper-inspired static object-type inference uses deterministic project partitions of at most 100 files or 512 KiB of source. Raw ATD/ATFD retain every distinct type-property tuple. The positive label uses stable resolved providers, excluding unresolved receivers, standard-library objects, function-local allocation sites, and constant-like imported members.</p>
+                <p>Standalone functions and constructors retain their coupling metrics but are not labeled Feature Envy because the detector cannot justify a Move Method-style owner. Member calls are included, array indices become <code>IDX</code>, and nested functions remain independent.</p>
                 <p>Coverage, unresolved accesses, exact local-access counts, and inference provenance are exported. This is an approximation—not the paper&apos;s full JIPDA abstract interpreter.</p>
               </details>
             </article>
@@ -1287,9 +1288,9 @@ export default function Home() {
                     <th>CYCLO</th>
                     <th>MAXNESTING</th>
                     <th>CONDOPS_MAX</th>
-                    <th>ATFD</th>
-                    <th>LAA</th>
-                    <th>FDP</th>
+                    <th title="Resolved ATFD used by the Feature Envy label">RATFD</th>
+                    <th title="Resolved LAA used by the Feature Envy label">RLAA</th>
+                    <th title="Resolved FDP used by the Feature Envy label">RFDP</th>
                     {showAdvancedMetrics && (
                       <>
                         <th title="Inclusive physical line span">SPAN_LOC</th>
@@ -1302,7 +1303,11 @@ export default function Home() {
                         <th title="Auxiliary Sonar-compatible Complex Conditional label">SONAR_CC</th>
                         <th>COND_NESTING</th>
                         <th title="Access to data: distinct local and foreign type-property tuples">ATD</th>
+                        <th title="Raw ATFD, including unresolved coupling evidence">ATFD_RAW</th>
+                        <th title="Raw LAA, including unresolved coupling evidence">LAA_RAW</th>
+                        <th title="Raw FDP, including unresolved coupling evidence">FDP_RAW</th>
                         <th>LOCAL_ACCESS_COUNT</th>
+                        <th>FE_OWNER_RESOLVED</th>
                         <th title="Resolved coupling tuples / all coupling tuples">TYPE_COVERAGE</th>
                         <th>UNKNOWN_ACCESSES</th>
                         <th>FOREIGN_MEMBER_CALLS</th>
@@ -1323,9 +1328,9 @@ export default function Home() {
                       <td>{result.cyclo}</td>
                       <td>{result.maxNesting}</td>
                       <td>{result.condOpsMax}</td>
-                      <td>{result.atfd}</td>
-                      <td>{result.laa.toFixed(3)}</td>
-                      <td title={result.foreignProviders.join(" | ")}>{result.fdp}</td>
+                      <td>{result.resolvedAtfd}</td>
+                      <td>{result.resolvedLaa.toFixed(3)}</td>
+                      <td title={result.resolvedForeignProviders.join(" | ")}>{result.resolvedFdp}</td>
                       {showAdvancedMetrics && (
                         <>
                           <td>{result.spanLoc}</td>
@@ -1338,7 +1343,11 @@ export default function Home() {
                           <td>{Number(result.isComplexConditionalSonar)}</td>
                           <td>{result.condNesting}</td>
                           <td>{result.atd}</td>
+                          <td>{result.atfd}</td>
+                          <td>{result.laa.toFixed(3)}</td>
+                          <td title={result.foreignProviders.join(" | ")}>{result.fdp}</td>
                           <td>{result.localAccessCount}</td>
+                          <td>{Number(result.feOwnerResolved)}</td>
                           <td>{result.typeInferenceCoverage.toFixed(3)}</td>
                           <td>{result.unknownAccessCount}</td>
                           <td title={result.foreignCallProviders.join(" | ")}>{result.foreignMemberCalls}</td>
@@ -1372,9 +1381,9 @@ export default function Home() {
                     <MetricPill label="CYCLO" value={result.cyclo} />
                     <MetricPill label="MAXNESTING" value={result.maxNesting} />
                     <MetricPill label="CONDOPS_MAX" value={result.condOpsMax} />
-                    <MetricPill label="ATFD" value={result.atfd} />
-                    <MetricPill label="LAA" value={result.laa.toFixed(3)} />
-                    <MetricPill label="FDP" value={result.fdp} />
+                    <MetricPill label="RATFD" value={result.resolvedAtfd} />
+                    <MetricPill label="RLAA" value={result.resolvedLaa.toFixed(3)} />
+                    <MetricPill label="RFDP" value={result.resolvedFdp} />
                   </div>
                   <details className="segment-audit">
                     <summary>Advanced metrics and Feature Envy evidence</summary>
@@ -1389,12 +1398,22 @@ export default function Home() {
                       <MetricPill label="SONAR_CC" value={Number(result.isComplexConditionalSonar)} />
                       <MetricPill label="COND_NESTING" value={result.condNesting} />
                       <MetricPill label="ATD" value={result.atd} />
+                      <MetricPill label="ATFD_RAW" value={result.atfd} />
+                      <MetricPill label="LAA_RAW" value={result.laa.toFixed(3)} />
+                      <MetricPill label="FDP_RAW" value={result.fdp} />
                       <MetricPill label="LOCAL_ACCESS_COUNT" value={result.localAccessCount} />
+                      <MetricPill label="RESOLVED_ATD" value={result.resolvedAtd} />
+                      <MetricPill label="RESOLVED_ATFD" value={result.resolvedAtfd} />
+                      <MetricPill label="RESOLVED_LAA" value={result.resolvedLaa.toFixed(3)} />
+                      <MetricPill label="RESOLVED_FDP" value={result.resolvedFdp} />
+                      <MetricPill label="FE_OWNER_RESOLVED" value={Number(result.feOwnerResolved)} />
+                      <MetricPill label="IS_CONSTRUCTOR" value={Number(result.isConstructor)} />
                       <MetricPill label="TYPE_COVERAGE" value={result.typeInferenceCoverage.toFixed(3)} />
                       <MetricPill label="UNKNOWN_ACCESSES" value={result.unknownAccessCount} />
                       <MetricPill label="FOREIGN_MEMBER_CALLS" value={result.foreignMemberCalls} />
                     </div>
                     {result.foreignProviders.length > 0 && <p className="provider-line"><strong>Foreign providers:</strong> {result.foreignProviders.join(" · ")}</p>}
+                    {result.resolvedForeignProviders.length > 0 && <p className="provider-line"><strong>Resolved data providers used by the label:</strong> {result.resolvedForeignProviders.join(" · ")}</p>}
                     {result.foreignCallProviders.length > 0 && <p className="provider-line"><strong>Foreign call providers:</strong> {result.foreignCallProviders.join(" · ")}</p>}
                     {result.couplingTuples.length > 0 && <p className="provider-line"><strong>Distinct coupling tuples:</strong> {result.couplingTuples.join(" · ")}</p>}
                   </details>

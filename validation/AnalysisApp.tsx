@@ -24,12 +24,12 @@ function formatPercent(value: number | null) {
   return value === null || !Number.isFinite(value) ? "—" : `${(value * 100).toFixed(1)}%`;
 }
 
-function decisionLabel(value: Decision | "tie" | null) {
+function decisionLabel(value: Decision | "tie" | "eligible" | "ineligible" | null) {
   if (!value) return "Missing";
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function decisionClass(value: Decision | "tie" | null) {
+function decisionClass(value: Decision | "tie" | "eligible" | "ineligible" | null) {
   return `analysis-decision analysis-decision--${value ?? "missing"}`;
 }
 
@@ -49,6 +49,7 @@ function parseSources(value: unknown): SourceSample[] {
 function downloadComparison(comparisons: MethodComparison[]) {
   const headers = [
     "SAMPLE_ID", "DATASET_METHOD_ID", "PROJECT", "FILE", "FUNCTION", "VALIDATOR_ID",
+    "SAMPLE_DISPOSITION", "INELIGIBILITY_REASON", "INELIGIBILITY_DETAILS",
     ...ANALYSIS_SMELLS.flatMap((smell) => [
       `DETECTOR_${smell.detectorColumn}`,
       `VALIDATOR_${smell.annotationColumn}`,
@@ -67,6 +68,9 @@ function downloadComparison(comparisons: MethodComparison[]) {
     method.reference?.file ?? "",
     method.reference?.functionName ?? "",
     annotation.validatorId,
+    annotation.sampleDisposition,
+    annotation.ineligibilityReason,
+    annotation.ineligibilityDetails,
     ...ANALYSIS_SMELLS.flatMap((smell) => [
       method.reference?.detector[smell.key] ?? "",
       annotation.decisions[smell.key],
@@ -89,6 +93,9 @@ function downloadComparison(comparisons: MethodComparison[]) {
 function OutcomeBadge({ method, smell }: { method: MethodComparison; smell: SmellKey }) {
   const consensus = method.consensus[smell];
   const detector = method.reference?.detector[smell];
+  if (!method.annotations.some((annotation) => annotation.sampleDisposition === "eligible")) {
+    return <span className={decisionClass("ineligible")}>Ineligible</span>;
+  }
   if (consensus === "uncertain" || consensus === "tie" || consensus === null || detector === undefined) {
     return <span className={decisionClass(consensus)}>{decisionLabel(consensus)}</span>;
   }
@@ -106,12 +113,15 @@ export default function AnalysisApp() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [smellFilter, setSmellFilter] = useState<SmellKey | "all">("all");
-  const [outcomeFilter, setOutcomeFilter] = useState<"all" | "agreement" | "disagreement" | "uncertain">("all");
+  const [outcomeFilter, setOutcomeFilter] = useState<"all" | "agreement" | "disagreement" | "uncertain" | "ineligible">("all");
 
   const comparisons = useMemo(() => buildComparisons(annotations, references, sources), [annotations, references, sources]);
   const validators = useMemo(() => [...new Set(annotations.map((row) => row.validatorId))].sort(), [annotations]);
   const datasets = useMemo(() => [...new Set(annotations.map((row) => row.datasetSha256).filter(Boolean))], [annotations]);
   const matched = comparisons.filter((method) => method.reference).length;
+  const latestJudgments = comparisons.flatMap((method) => method.annotations);
+  const ineligibleReports = latestJudgments.filter((annotation) => annotation.sampleDisposition === "ineligible").length;
+  const ineligibleMethods = comparisons.filter((method) => !method.annotations.some((annotation) => annotation.sampleDisposition === "eligible")).length;
   const metricRows = ANALYSIS_SMELLS.map((smell) => ({
     ...smell,
     performance: binaryMetrics(comparisons, smell.key),
@@ -127,6 +137,7 @@ export default function AnalysisApp() {
     if (query && !searchable.includes(query)) return false;
     const smells = smellFilter === "all" ? ANALYSIS_SMELLS.map((smell) => smell.key) : [smellFilter];
     if (outcomeFilter === "all") return true;
+    if (outcomeFilter === "ineligible") return method.annotations.some((annotation) => annotation.sampleDisposition === "ineligible");
     return smells.some((smell) => {
       const consensus = method.consensus[smell];
       const detector = method.reference?.detector[smell];
@@ -231,18 +242,19 @@ export default function AnalysisApp() {
               <article><span>Unique validators</span><strong>{validators.length}</strong></article>
               <article><span>Dataset versions</span><strong>{datasets.length || 1}</strong></article>
               <article><span>Matched to detector</span><strong>{matched.toLocaleString()} <small>· {formatPercent(comparisons.length ? matched / comparisons.length : null)}</small></strong></article>
-              <article><span>Latest judgments</span><strong>{comparisons.reduce((sum, method) => sum + method.annotations.length, 0).toLocaleString()}</strong></article>
+              <article><span>Latest judgments</span><strong>{latestJudgments.length.toLocaleString()}</strong></article>
+              <article><span>Ineligible reports</span><strong>{ineligibleReports.toLocaleString()} <small>· {ineligibleMethods.toLocaleString()} method{ineligibleMethods === 1 ? "" : "s"} fully excluded</small></strong></article>
               <article><span>Macro F1</span><strong>{formatRatio(macroF1)}</strong></article>
               <article><span>Mean Krippendorff’s α</span><strong>{formatRatio(meanAlpha)}</strong></article>
             </section>
 
             <section className="analysis-panel">
-              <div className="analysis-panel__heading"><div><p className="kicker">PERFORMANCE</p><h2>Detector versus expert consensus</h2></div><p>Uncertain judgments and tied consensus are reported but excluded from binary metrics.</p></div>
+              <div className="analysis-panel__heading"><div><p className="kicker">PERFORMANCE</p><h2>Detector versus expert consensus</h2></div><p>Uncertain judgments, tied consensus, and methods reported as ineligible are retained but excluded from binary metrics.</p></div>
               <div className="analysis-table-wrap">
                 <table className="analysis-table">
                   <thead><tr><th>Smell</th><th>TP</th><th>TN</th><th>FP</th><th>FN</th><th>Excluded</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>Specificity</th><th>F1</th><th>Balanced accuracy</th><th>MCC</th></tr></thead>
                   <tbody>{metricRows.map((row) => <tr key={row.key}>
-                    <th>{row.label}</th><td>{row.performance.tp}</td><td>{row.performance.tn}</td><td>{row.performance.fp}</td><td>{row.performance.fn}</td><td>{row.performance.uncertain + row.performance.ties}</td>
+                    <th>{row.label}</th><td>{row.performance.tp}</td><td>{row.performance.tn}</td><td>{row.performance.fp}</td><td>{row.performance.fn}</td><td>{row.performance.uncertain + row.performance.ties + row.performance.ineligible}</td>
                     <td>{formatRatio(row.performance.accuracy)}</td><td>{formatRatio(row.performance.precision)}</td><td>{formatRatio(row.performance.recall)}</td><td>{formatRatio(row.performance.specificity)}</td><td>{formatRatio(row.performance.f1)}</td><td>{formatRatio(row.performance.balancedAccuracy)}</td><td>{formatRatio(row.performance.mcc)}</td>
                   </tr>)}</tbody>
                 </table>
@@ -250,7 +262,7 @@ export default function AnalysisApp() {
             </section>
 
             <section className="analysis-panel">
-              <div className="analysis-panel__heading"><div><p className="kicker">RELIABILITY</p><h2>Inter-rater agreement</h2></div><p>Present, Absent, and Uncertain are retained as nominal categories. At least two ratings per method are required.</p></div>
+              <div className="analysis-panel__heading"><div><p className="kicker">RELIABILITY</p><h2>Inter-rater agreement</h2></div><p>Present, Absent, and Uncertain are retained as nominal categories. Ineligible reports are excluded. At least two eligible ratings per method are required.</p></div>
               <div className="analysis-table-wrap">
                 <table className="analysis-table analysis-table--compact">
                   <thead><tr><th>Smell</th><th>Methods with 2+ ratings</th><th>Total ratings</th><th>Pairwise agreement</th><th>Krippendorff’s α</th><th>Fleiss’ κ</th></tr></thead>
@@ -265,7 +277,7 @@ export default function AnalysisApp() {
                 <div className="analysis-filters">
                   <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search method, file, project, or ID" aria-label="Search comparisons" />
                   <select value={smellFilter} onChange={(event) => setSmellFilter(event.target.value as SmellKey | "all")} aria-label="Filter by smell"><option value="all">All smells</option>{ANALYSIS_SMELLS.map((smell) => <option value={smell.key} key={smell.key}>{smell.label}</option>)}</select>
-                  <select value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value as typeof outcomeFilter)} aria-label="Filter by outcome"><option value="all">All outcomes</option><option value="agreement">Agreement only</option><option value="disagreement">Disagreement only</option><option value="uncertain">Uncertain, tied, or missing</option></select>
+                  <select value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value as typeof outcomeFilter)} aria-label="Filter by outcome"><option value="all">All outcomes</option><option value="agreement">Agreement only</option><option value="disagreement">Disagreement only</option><option value="uncertain">Uncertain, tied, or missing</option><option value="ineligible">Reported sample issues</option></select>
                 </div>
               </div>
               <div className="method-comparisons">
@@ -278,11 +290,11 @@ export default function AnalysisApp() {
                     <div className="method-comparison__body">
                       <div className="judgment-grid">
                         <table className="analysis-table">
-                          <thead><tr><th>Validator</th>{ANALYSIS_SMELLS.map((smell) => <th key={smell.key}>{smell.label}</th>)}<th>Notes</th><th>Submitted</th></tr></thead>
+                          <thead><tr><th>Validator</th><th>Sample status</th>{ANALYSIS_SMELLS.map((smell) => <th key={smell.key}>{smell.label}</th>)}<th>Sample issue / notes</th><th>Submitted</th></tr></thead>
                           <tbody>
-                            <tr className="detector-row"><th>Detector</th>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}><span className={decisionClass(method.reference ? method.reference.detector[smell.key] ? "present" : "absent" : null)}>{method.reference ? method.reference.detector[smell.key] ? "Present" : "Absent" : "Missing"}</span></td>)}<td>{method.reference?.smellTypes || "—"}</td><td>—</td></tr>
-                            {method.annotations.map((annotation) => <tr key={annotation.annotationId}><th>{annotation.validatorId}</th>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}><span className={decisionClass(annotation.decisions[smell.key])}>{decisionLabel(annotation.decisions[smell.key])}</span></td>)}<td className="notes-cell">{annotation.notes || "—"}</td><td>{annotation.submittedAt ? new Date(annotation.submittedAt).toLocaleString() : "—"}</td></tr>)}
-                            <tr className="consensus-row"><th>Consensus</th>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}><span className={decisionClass(method.consensus[smell.key])}>{decisionLabel(method.consensus[smell.key])}</span></td>)}<td colSpan={2}>Simple modal category; ties remain unresolved.</td></tr>
+                            <tr className="detector-row"><th>Detector</th><td>Prediction</td>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}><span className={decisionClass(method.reference ? method.reference.detector[smell.key] ? "present" : "absent" : null)}>{method.reference ? method.reference.detector[smell.key] ? "Present" : "Absent" : "Missing"}</span></td>)}<td>{method.reference?.smellTypes || "—"}</td><td>—</td></tr>
+                            {method.annotations.map((annotation) => <tr key={annotation.annotationId}><th>{annotation.validatorId}</th><td><span className={decisionClass(annotation.sampleDisposition)}>{decisionLabel(annotation.sampleDisposition)}</span></td>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}>{annotation.sampleDisposition === "ineligible" ? <span className={decisionClass(null)}>Not rated</span> : <span className={decisionClass(annotation.decisions[smell.key])}>{decisionLabel(annotation.decisions[smell.key])}</span>}</td>)}<td className="notes-cell">{annotation.sampleDisposition === "ineligible" ? `${annotation.ineligibilityReason.replaceAll("_", " ")}${annotation.ineligibilityDetails ? `: ${annotation.ineligibilityDetails}` : ""}` : annotation.notes || "—"}</td><td>{annotation.submittedAt ? new Date(annotation.submittedAt).toLocaleString() : "—"}</td></tr>)}
+                            <tr className="consensus-row"><th>Consensus</th><td>{method.annotations.some((annotation) => annotation.sampleDisposition === "eligible") ? "Eligible ratings" : "Excluded"}</td>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}><span className={decisionClass(method.annotations.some((annotation) => annotation.sampleDisposition === "eligible") ? method.consensus[smell.key] : "ineligible")}>{method.annotations.some((annotation) => annotation.sampleDisposition === "eligible") ? decisionLabel(method.consensus[smell.key]) : "Ineligible"}</span></td>)}<td colSpan={2}>Simple modal category; ties remain unresolved.</td></tr>
                           </tbody>
                         </table>
                       </div>

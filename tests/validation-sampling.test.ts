@@ -139,6 +139,10 @@ test("builds a deterministic blinded sample and keeps private detector evidence 
   assert.ok(manifestLines.length > 1);
   assert.equal(manifestLines[0].split(",").length, manifestLines[1].split(",").length);
   assert.match(manifestLines[0], /FE_BATCH_BYTE_LIMIT/);
+  assert.match(manifestLines[0], /RESOLVED_ATFD/);
+  assert.match(manifestLines[0], /RESOLVED_LAA/);
+  assert.match(manifestLines[0], /RESOLVED_FDP/);
+  assert.match(manifestLines[0], /FE_OWNER_RESOLVED/);
 
   const payload = JSON.parse(artifact("validation-sample.blinded.json") ?? "{}") as {
     samples: Array<Record<string, unknown>>;
@@ -146,7 +150,7 @@ test("builds a deterministic blinded sample and keeps private detector evidence 
   assert.equal(payload.samples.length, 8);
   for (const sample of payload.samples) {
     assert.equal(sample.datasetMethodId, sample.sampleId);
-    for (const privateField of ["loc", "cyclo", "atfd", "isSmelly", "smellTypes", "samplingStratum", "sampleRole"]) {
+    for (const privateField of ["loc", "cyclo", "atfd", "resolvedAtfd", "feOwnerResolved", "isConstructor", "isSmelly", "smellTypes", "samplingStratum", "sampleRole"]) {
       assert.equal(Object.hasOwn(sample, privateField), false, `${privateField} must not be exposed to validators`);
     }
   }
@@ -205,6 +209,25 @@ test("outer collection and repository names do not exclude all production method
 
   assert.equal(generatedPreview.eligibleCount, 1);
   assert.equal(generatedPreview.exclusionCounts.GENERATED_OR_MINIFIED, undefined);
+});
+
+test("excludes known vendored trees and bundled filenames from validation samples", () => {
+  const excluded = [
+    method(1, "jspaint", {}, "Sample/jspaint/lib/UTIF.js"),
+    method(2, "jspaint", {}, "Sample/jspaint/lib/anypalette-0.6.0.js"),
+    method(3, "jspaint", {}, "Sample/jspaint/lib/UPNG.js"),
+    method(4, "jspaint", {}, "Sample/jspaint/lib/pdf.js/web/viewer.js"),
+    method(5, "jspaint", {}, "Sample/jspaint/lib/discord-sdk.js"),
+    method(6, "maptalks.js", {}, "Sample/maptalks.js/packages/transcoders.ktx/src/lib/basis_transcoder.js"),
+    method(7, "xeokit-sdk", {}, "Sample/xeokit-sdk/src/plugins/XML3DLoaderPlugin/zipjs/deflate.js"),
+    method(8, "jspaint", {}, "Sample/jspaint/src/sdk-bundled-with-skypack.js"),
+  ];
+  const options = config(excluded);
+  options.sampleSize = 1;
+  const preview = previewSamplingPopulation(excluded, options);
+
+  assert.equal(preview.eligibleCount, 0);
+  assert.equal(preview.exclusionCounts.GENERATED_OR_MINIFIED, excluded.length);
 });
 
 test("stored ZIP writer emits a valid deterministic ZIP signature", async () => {

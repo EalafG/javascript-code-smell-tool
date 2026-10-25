@@ -48,3 +48,28 @@ test("perfect inter-rater agreement produces alpha and kappa of one", () => {
   assert.equal(agreement.fleissKappa, 1);
 });
 
+test("ineligible sample reports are preserved but excluded from performance and agreement", () => {
+  const header = "ANNOTATION_ID,VALIDATOR_ID,SAMPLE_ID,REVISION,SAMPLE_DISPOSITION,INELIGIBILITY_REASON,INELIGIBILITY_DETAILS,LONG_METHOD,COMPLEX_METHOD,COMPLEX_CONDITIONAL,FEATURE_ENVY";
+  const annotations = parseAnnotationCsv([
+    header,
+    "A1,V1,S1,1,ineligible,third_party_or_generated,vendored runtime,,,,",
+    "A2,V2,S1,1,ineligible,third_party_or_generated,bundled copy,,,,",
+    "A3,V1,S2,1,eligible,,,present,absent,absent,absent",
+    "A4,V2,S2,1,eligible,,,present,absent,absent,absent",
+  ].join("\n"), "annotations.csv");
+  const reference = parseReferenceCsv("SAMPLE_ID,DATASET_METHOD_ID,is_long_method,is_complex_method,is_complex_conditional,is_feature_envy\nS1,M1,1,0,0,0\nS2,M2,1,0,0,0", "manifest.csv");
+  const comparisons = buildComparisons(annotations, reference);
+
+  const excluded = comparisons.find((method) => method.sampleId === "S1");
+  assert.equal(excluded?.consensus.longMethod, null);
+  assert.equal(excluded?.annotations[0].ineligibilityReason, "third_party_or_generated");
+
+  const performance = binaryMetrics(comparisons, "longMethod");
+  assert.deepEqual({ tp: performance.tp, evaluated: performance.evaluated, ineligible: performance.ineligible }, { tp: 1, evaluated: 1, ineligible: 1 });
+
+  const agreement = agreementMetrics(comparisons, "longMethod");
+  assert.equal(agreement.units, 1);
+  assert.equal(agreement.ratings, 2);
+  assert.equal(agreement.krippendorffAlpha, null);
+});
+

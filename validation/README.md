@@ -59,7 +59,8 @@ JavaScript experience, code-review frequency, code-smell familiarity, the
 accepted declaration IDs, and an ISO timestamp. Validators must confirm that
 they can assess JavaScript method-level code, will work independently and
 blindly, will handle source samples confidentially, and will use `Uncertain`
-with a note when essential context is missing.
+with a note only for a smell-level borderline judgment. Whole-sample problems
+are recorded separately as ineligible, with a required reason.
 
 This is an operational research declaration, not a substitute for the
 participant information sheet, informed-consent form, ethics approval, or
@@ -119,6 +120,12 @@ as an append-only CSV. Declaration version, acceptance time, and experience
 categories are repeated on each exported annotation row for auditability. This
 mode is useful for testing and offline annotation.
 
+The workspace keeps `Uncertain` separate from sample eligibility. Validators
+can report a whole sample as ineligible using a required reason. The exported
+CSV preserves that report with blank smell decisions. The analysis page shows
+ineligible reports for audit but excludes them from consensus, agreement, and
+binary detector-performance metrics.
+
 For a multi-validator study, create a Supabase project, run
 `database/schema.sql`, import the frozen pilot rows, and set:
 
@@ -132,6 +139,10 @@ service-role key. Hosted mode uses passwordless email sign-in; the Supabase
 Auth UUID is the validator's stable identifier. Configure the site URL and
 redirect URL for both the local `/validation/` URL and the deployed GitHub
 Pages `/validation/` URL.
+
+For a hosted database created from an earlier schema, run
+`database/migration-2026-10-25-sample-eligibility.sql` once in the Supabase SQL
+editor before validators use the new sample-issue control.
 
 ## Study workflow
 

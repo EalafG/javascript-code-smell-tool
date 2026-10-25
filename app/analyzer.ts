@@ -71,6 +71,7 @@ export type MethodResult = {
   codeCategory: SourceCategory;
   functionName: string;
   functionType: string;
+  isConstructor: boolean;
   startLine: number;
   endLine: number;
   contextStartLine: number;
@@ -96,6 +97,12 @@ export type MethodResult = {
   laa: number;
   fdp: number;
   foreignProviders: string[];
+  resolvedAtd: number;
+  resolvedAtfd: number;
+  resolvedLaa: number;
+  resolvedFdp: number;
+  resolvedForeignProviders: string[];
+  feOwnerResolved: boolean;
   couplingTuples: string[];
   typeInferenceCoverage: number;
   unknownAccessCount: number;
@@ -136,6 +143,7 @@ type FunctionCandidate = {
   segmentNode: AstNode;
   functionType: string;
   functionName: string;
+  isConstructor: boolean;
 };
 
 type AstComment = {
@@ -250,6 +258,7 @@ function collectFunctions(ast: AstNode, source: string): FunctionCandidate[] {
         segmentNode: node,
         functionType: "MethodDefinition",
         functionName: propertyName(node.key, source),
+        isConstructor: node.kind === "constructor",
       });
     } else if (node.type === "Property" && isNode(node.value) && isFunctionNode(node.value)) {
       ownedFunctionNodes.add(node.value);
@@ -258,6 +267,7 @@ function collectFunctions(ast: AstNode, source: string): FunctionCandidate[] {
         segmentNode: node,
         functionType: node.method ? "ObjectMethod" : node.value.type,
         functionName: propertyName(node.key, source),
+        isConstructor: false,
       });
     } else if (isFunctionNode(node) && !ownedFunctionNodes.has(node)) {
       candidates.push({
@@ -265,6 +275,7 @@ function collectFunctions(ast: AstNode, source: string): FunctionCandidate[] {
         segmentNode: node,
         functionType: node.type,
         functionName: inferFunctionName(node, parent, source),
+        isConstructor: false,
       });
     }
 
@@ -492,9 +503,11 @@ export function classifyResult(result: MethodResult, thresholds: Thresholds): Me
   const isComplexConditionalSonar =
     result.logicalOpsMax > thresholds.conditionalLogicalOpsMax;
   const isFeatureEnvy =
-    result.atfd > thresholds.few &&
-    result.localAccessCount * 3 < result.atd &&
-    result.fdp <= thresholds.few;
+    result.feOwnerResolved &&
+    !result.isConstructor &&
+    result.resolvedAtfd > thresholds.few &&
+    result.localAccessCount * 3 < result.resolvedAtd &&
+    result.resolvedFdp <= thresholds.few;
 
   const smellTypes = [
     isLongMethod ? "Long Method" : null,
@@ -604,6 +617,7 @@ export function analyzeParsedSource(
       codeCategory: classifySourceCategory(descriptor.relativePath),
       functionName: candidate.functionName,
       functionType: candidate.functionType,
+      isConstructor: candidate.isConstructor,
       ...metrics,
       contextStartLine,
       contextEndLine,

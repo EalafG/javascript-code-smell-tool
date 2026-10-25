@@ -1,4 +1,4 @@
-# Browser Validation Sampling Protocol — Version 2.0.1
+# Browser Validation Sampling Protocol — Version 2.0.2
 
 ## Purpose
 
@@ -80,6 +80,13 @@ Eligibility path rules begin inside the resolved repository boundary. An outer
 collection folder such as `Sample`, or a repository whose own name happens to
 be `generated`, is neutral; only matching path components inside that repository
 trigger the generated/example exclusions.
+
+The generated/external check also recognizes the frozen third-party paths used
+by the study corpus, including JS Paint's vendored `lib` tree, the maptalks
+transcoder runtime trees, xeokit's vendored `zipjs` tree, and generated typedoc
+assets. Filenames containing `bundled` are excluded even when they do not use a
+`.bundle.js` suffix. These rules are versioned here so the eligible population
+can be reproduced.
 
 The minimum LOC default is 1. Do not impose a global three- or five-line cutoff
 without a smell-specific rationale: a short method can still contain a Complex

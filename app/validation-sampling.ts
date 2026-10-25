@@ -16,7 +16,7 @@ export const SAMPLING_SMELLS: Array<{ key: SamplingSmellKey; label: string }> = 
   { key: "featureEnvy", label: "Feature Envy" },
 ];
 
-export const SAMPLING_PROTOCOL_VERSION = "2.0.1";
+export const SAMPLING_PROTOCOL_VERSION = "2.0.2";
 
 export type ValidationSamplingConfig = {
   preset: SamplingPreset;
@@ -108,6 +108,15 @@ type SamplingPlan = {
 };
 
 const GENERATED_PATH_PARTS = new Set(["generated", "compiled", "third-party", "third_party", "externals"]);
+const KNOWN_EXTERNAL_PATHS = [
+  "jspaint/lib/",
+  "maptalks.js/packages/transcoders.crn/src/lib/",
+  "maptalks.js/packages/transcoders.draco/src/lib/",
+  "maptalks.js/packages/transcoders.ktx/src/lib/",
+  "maptalks.js/packages/transcoders.ktx2/src/lib/",
+  "xeokit-sdk/src/plugins/xml3dloaderplugin/zipjs/",
+  "xeokit-sdk/typedocs/assets/",
+];
 const EXAMPLE_PATH_PARTS = new Set(["demo", "demos", "example", "examples", "playground", "sample", "samples", "debug"]);
 const UMBRELLA_FOLDER_NAMES = new Set(["dataset", "datasets", "project", "projects", "repo", "repos", "repositories", "sample", "samples", "source", "sources"]);
 
@@ -159,10 +168,13 @@ export function samplingProjectFor(
 function isGenerated(result: MethodResult): boolean {
   const parts = repositoryPathParts(result).map((part) => part.toLowerCase());
   const fileName = parts.at(-1) ?? "";
+  const normalizedPath = result.relativePath.replace(/\\/g, "/").toLowerCase();
   return parts.some((part) => GENERATED_PATH_PARTS.has(part)) ||
+    KNOWN_EXTERNAL_PATHS.some((prefix) => normalizedPath.includes(prefix)) ||
     fileName.includes(".min.") || fileName.includes(".bundle.") ||
     fileName.endsWith("-bundle.js") || fileName.endsWith(".bundled.js") ||
-    fileName.includes("generated") || result.source.split(/\r\n|\n|\r/).some((line) => line.length > 5000);
+    fileName.includes("bundled") || fileName.includes("generated") ||
+    result.source.split(/\r\n|\n|\r/).some((line) => line.length > 5000);
 }
 
 function isExample(result: MethodResult): boolean {
@@ -284,9 +296,10 @@ function boundaryScore(result: MethodResult, thresholds: Thresholds): number {
   if (!result.isComplexConditional) scores.push(Math.abs(result.condOpsMax - thresholds.conditionalOps) / Math.max(1, thresholds.conditionalOps));
   if (!result.isFeatureEnvy) {
     scores.push(
-      Math.abs(result.atfd - (thresholds.few + 1)) / Math.max(1, thresholds.few + 1) +
-      Math.abs(result.laa - (1 / 3)) +
-      Math.abs(result.fdp - thresholds.few) / Math.max(1, thresholds.few),
+      Math.abs(result.resolvedAtfd - (thresholds.few + 1)) / Math.max(1, thresholds.few + 1) +
+      Math.abs(result.resolvedLaa - (1 / 3)) +
+      Math.abs(result.resolvedFdp - thresholds.few) / Math.max(1, thresholds.few) +
+      (result.feOwnerResolved && !result.isConstructor ? 0 : 1),
     );
   }
   return scores.length ? Math.min(...scores) : Number.POSITIVE_INFINITY;
@@ -535,6 +548,7 @@ async function datasetFingerprint(results: MethodResult[], context: SamplingBuil
       result.relativePath,
       result.functionName,
       result.functionType,
+      Number(result.isConstructor),
       result.startLine,
       result.endLine,
       result.source,
@@ -545,6 +559,10 @@ async function datasetFingerprint(results: MethodResult[], context: SamplingBuil
       result.atfd,
       result.laa,
       result.fdp,
+      result.resolvedAtfd,
+      result.resolvedLaa,
+      result.resolvedFdp,
+      Number(result.feOwnerResolved),
       Number(result.isLongMethod),
       Number(result.isComplexMethod),
       Number(result.isComplexConditional),
@@ -651,9 +669,11 @@ export async function buildValidationSamplePackage(
   const masterPayload = { study, samples: blindedSamples };
 
   const manifestHeaders = [
-    "SAMPLE_ID", "DATASET_METHOD_ID", "PROJECT", "DATASET_PROJECT", "FILE", "FUNCTION", "FUNCTION_TYPE",
+    "SAMPLE_ID", "DATASET_METHOD_ID", "PROJECT", "DATASET_PROJECT", "FILE", "FUNCTION", "FUNCTION_TYPE", "IS_CONSTRUCTOR",
     "START_LINE", "END_LINE", "LOC", "CYCLO", "MAXNESTING", "CONDOPS_MAX", "COND_NESTING",
-    "NUM_CONDITIONS", "ATFD", "LAA", "FDP", "FOREIGN_PROVIDERS", "is_long_method",
+    "NUM_CONDITIONS", "ATFD", "LAA", "FDP", "FOREIGN_PROVIDERS", "RESOLVED_ATD",
+    "RESOLVED_ATFD", "RESOLVED_LAA", "RESOLVED_FDP", "RESOLVED_FOREIGN_PROVIDERS",
+    "FE_OWNER_RESOLVED", "is_long_method",
     "is_complex_method", "is_complex_conditional", "is_feature_envy", "is_smelly", "SMELL_COUNT",
     "SMELL_TYPES", "SAMPLE_ROLE", "SAMPLING_STRATUM", "STRATUM_POOL_N_PROJECT",
     "STRATUM_SELECTED_N_PROJECT", "CONDITIONAL_INCLUSION_PROBABILITY", "SAMPLING_SEED",
@@ -667,10 +687,13 @@ export async function buildValidationSamplePackage(
     const probability = item.poolProjectN ? roleProjectSelected / item.poolProjectN : 0;
     return [
       sampleId, item.result.id, item.samplingProject, item.result.project, item.result.relativePath,
-      item.result.functionName, item.result.functionType, item.result.startLine, item.result.endLine,
+      item.result.functionName, item.result.functionType, Number(item.result.isConstructor), item.result.startLine, item.result.endLine,
       item.result.loc, item.result.cyclo, item.result.maxNesting, item.result.condOpsMax,
       item.result.condNesting, item.result.numConditions, item.result.atfd, item.result.laa.toFixed(10),
-      item.result.fdp, item.result.foreignProviders.join("|"), Number(item.result.isLongMethod),
+      item.result.fdp, item.result.foreignProviders.join("|"), item.result.resolvedAtd,
+      item.result.resolvedAtfd, item.result.resolvedLaa.toFixed(10), item.result.resolvedFdp,
+      item.result.resolvedForeignProviders.join("|"), Number(item.result.feOwnerResolved),
+      Number(item.result.isLongMethod),
       Number(item.result.isComplexMethod), Number(item.result.isComplexConditional),
       Number(item.result.isFeatureEnvy), Number(item.result.isSmelly), item.result.smellCount,
       item.result.smellTypes.join("|"), item.role, `${item.role}|${item.samplingProject}`,

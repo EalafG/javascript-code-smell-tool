@@ -3,7 +3,7 @@ import {
   INFERENCE_PARTITION_FILE_LIMIT,
 } from "./analysis-partitions.ts";
 
-export const FEATURE_ENVY_INFERENCE_MODE = "partitioned-project-static-object-type-inference-v3";
+export const FEATURE_ENVY_INFERENCE_MODE = "partitioned-project-static-object-type-inference-v4";
 export const FEATURE_ENVY_MAX_ITERATIONS = 12;
 export const FEATURE_ENVY_TYPE_SET_LIMIT = 12;
 export const FEATURE_ENVY_BATCH_SIZE_LIMIT = INFERENCE_PARTITION_FILE_LIMIT;
@@ -96,6 +96,12 @@ export type FeatureEnvyMetrics = {
   laa: number;
   fdp: number;
   foreignProviders: string[];
+  resolvedAtd: number;
+  resolvedAtfd: number;
+  resolvedLaa: number;
+  resolvedFdp: number;
+  resolvedForeignProviders: string[];
+  feOwnerResolved: boolean;
   couplingTuples: string[];
   typeInferenceCoverage: number;
   unknownAccessCount: number;
@@ -723,7 +729,12 @@ function indexRelations(model: FeatureEnvyModel, ast: InferenceAstNode, source: 
         : context.classOwnerType;
       const property: PropertyDescriptor = { name: nameOf(node.key, source), computed: Boolean(node.computed), indexLike: false };
       addConstraint(model, { kind: "property", object: direct(ownerType), property, initial: true }, expressionTerm(model, node.value, context));
-      if (isNode(node.value)) walk(node.value, context, node);
+      if (isNode(node.value)) {
+        walk(node.value, {
+          ...context,
+          ownerHint: isFunctionNode(node.value) ? direct(ownerType) : null,
+        }, node);
+      }
       return;
     }
 
@@ -957,6 +968,74 @@ function isResolvedType(type: string): boolean {
   return !type.startsWith("unknown:") && !type.startsWith("property:");
 }
 
+function isConstantLikeProperty(property: string): boolean {
+  return /^[A-Z][A-Z0-9_]*$/.test(property);
+}
+
+const STANDARD_LIBRARY_PROTOTYPES = new Set([
+  "Array",
+  "ArrayBuffer",
+  "BigInt64Array",
+  "BigUint64Array",
+  "DataView",
+  "Date",
+  "Error",
+  "Float32Array",
+  "Float64Array",
+  "Int8Array",
+  "Int16Array",
+  "Int32Array",
+  "Map",
+  "Object",
+  "Promise",
+  "RegExp",
+  "Set",
+  "Uint8Array",
+  "Uint8ClampedArray",
+  "Uint16Array",
+  "Uint32Array",
+  "WeakMap",
+  "WeakSet",
+]);
+
+function isFunctionLocalAllocation(
+  type: string,
+  relativePath: string,
+  functionNode: InferenceAstNode,
+): boolean {
+  const objectPrefix = `object:${relativePath}@`;
+  const arrayPrefix = `array:${relativePath}@`;
+  const prefix = type.startsWith(objectPrefix)
+    ? objectPrefix
+    : type.startsWith(arrayPrefix)
+      ? arrayPrefix
+      : null;
+  if (!prefix) return false;
+  const allocationOffset = Number(type.slice(prefix.length));
+  return Number.isInteger(allocationOffset) &&
+    allocationOffset >= functionNode.start &&
+    allocationOffset < functionNode.end;
+}
+
+function isResolvedDataProvider(
+  type: string,
+  property: string,
+  memberInvocation: boolean,
+  relativePath: string,
+  functionNode: InferenceAstNode,
+): boolean {
+  if (!isResolvedType(type) || type.startsWith("builtin:")) return false;
+  if (type.startsWith("prototype:") && STANDARD_LIBRARY_PROTOTYPES.has(type.slice("prototype:".length))) {
+    return false;
+  }
+  if (isFunctionLocalAllocation(type, relativePath, functionNode)) return false;
+  return !(
+    type.startsWith("module:") &&
+    !memberInvocation &&
+    isConstantLikeProperty(property)
+  );
+}
+
 function isDirectMemberInvocation(node: InferenceAstNode, parent: InferenceAstNode | null): boolean {
   if (!parent) return false;
   if ((parent.type === "CallExpression" || parent.type === "NewExpression") && parent.callee === node) return true;
@@ -1001,6 +1080,8 @@ export function calculateFeatureEnvyMetrics(
   const localTuples = new Set<string>();
   const foreignTuples = new Set<string>();
   const foreignProviders = new Set<string>();
+  const resolvedForeignTuples = new Set<string>();
+  const resolvedForeignProviders = new Set<string>();
   const unknownTuples = new Set<string>();
   const couplingTuples = new Set<string>();
   const seenProperties = new Map<string, Set<string>>();
@@ -1013,6 +1094,7 @@ export function calculateFeatureEnvyMetrics(
     const syntacticThis = objectNode.type === "ThisExpression" || objectNode.type === "Super";
     const types = evaluateTerm(model, expressionTerm(model, objectNode, context), true);
     const role = simpleAssignmentRole(node, parent);
+    const memberInvocation = isDirectMemberInvocation(node, parent);
 
     for (const type of types) {
       const property = normalizedProperty(type, propertyDescriptor(node, source));
@@ -1040,9 +1122,19 @@ export function calculateFeatureEnvyMetrics(
         foreignTuples.add(tuple);
         foreignProviders.add(display);
         if (!isResolvedType(type)) unknownTuples.add(tuple);
+        else if (isResolvedDataProvider(
+          type,
+          property,
+          memberInvocation,
+          relativePath,
+          functionNode,
+        )) {
+          resolvedForeignTuples.add(tuple);
+          resolvedForeignProviders.add(display);
+        }
       }
 
-      if (isDirectMemberInvocation(node, parent) && !local) {
+      if (memberInvocation && !local) {
         foreignMemberCalls += 1;
         foreignCallProviders.add(display);
       }
@@ -1058,6 +1150,7 @@ export function calculateFeatureEnvyMetrics(
   visit(functionNode, null);
   const localAccessCount = localTuples.size;
   const atd = localAccessCount + foreignTuples.size;
+  const resolvedAtd = localAccessCount + resolvedForeignTuples.size;
   const resolvedCount = [...couplingTuples].filter((tuple) => !tuple.includes("unknown:") && !tuple.includes("unresolved:")).length;
   return {
     atd,
@@ -1066,6 +1159,12 @@ export function calculateFeatureEnvyMetrics(
     laa: atd === 0 ? 1 : localAccessCount / atd,
     fdp: foreignProviders.size,
     foreignProviders: [...foreignProviders].sort((a, b) => a.localeCompare(b)),
+    resolvedAtd,
+    resolvedAtfd: resolvedForeignTuples.size,
+    resolvedLaa: resolvedAtd === 0 ? 1 : localAccessCount / resolvedAtd,
+    resolvedFdp: resolvedForeignProviders.size,
+    resolvedForeignProviders: [...resolvedForeignProviders].sort((a, b) => a.localeCompare(b)),
+    feOwnerResolved: [...thisHierarchy].some(isResolvedType),
     couplingTuples: [...couplingTuples].sort((a, b) => a.localeCompare(b)),
     typeInferenceCoverage: atd === 0 ? 1 : resolvedCount / atd,
     unknownAccessCount: unknownTuples.size,
