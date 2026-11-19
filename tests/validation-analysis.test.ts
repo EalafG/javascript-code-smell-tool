@@ -32,7 +32,8 @@ test("binary metrics exclude uncertain consensus and count confusion outcomes", 
   const header = "ANNOTATION_ID,VALIDATOR_ID,SAMPLE_ID,REVISION,LONG_METHOD,COMPLEX_METHOD,COMPLEX_CONDITIONAL,FEATURE_ENVY";
   const annotations = parseAnnotationCsv(`${header}\nA1,V1,S1,1,present,absent,absent,absent\nA2,V1,S2,1,absent,absent,absent,absent\nA3,V1,S3,1,uncertain,absent,absent,absent`, "a.csv");
   const reference = parseReferenceCsv("SAMPLE_ID,DATASET_METHOD_ID,is_long_method,is_complex_method,is_complex_conditional,is_feature_envy\nS1,M1,1,0,0,0\nS2,M2,1,0,0,0\nS3,M3,0,0,0,0", "m.csv");
-  const metrics = binaryMetrics(buildComparisons(annotations, reference), "longMethod");
+  const secondReviewer = annotations.map((row) => ({ ...row, validatorId: "V2", annotationId: `${row.annotationId}-second` }));
+  const metrics = binaryMetrics(buildComparisons([...annotations, ...secondReviewer], reference), "longMethod");
   assert.deepEqual({ tp: metrics.tp, fp: metrics.fp, uncertain: metrics.uncertain, evaluated: metrics.evaluated }, { tp: 1, fp: 1, uncertain: 1, evaluated: 2 });
   assert.equal(metrics.precision, 0.5);
   assert.equal(metrics.recall, 1);

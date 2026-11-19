@@ -1,5 +1,9 @@
 import { useMemo, useState } from "react";
 import type { ChangeEvent } from "react";
+import ResearchPanel, { fingerprint } from "./ResearchPanel";
+import type { InputEvidence } from "./ResearchPanel";
+import { identityKey, mapReviewers, reviewerGroups, selectAnalysis } from "./research-analysis";
+import type { AnalysisMode, EligibilityDecision, ReviewerMapping } from "./research-analysis";
 import { SyntaxCode } from "../app/code-viewer";
 import {
   ANALYSIS_SMELLS,
@@ -48,12 +52,12 @@ function parseSources(value: unknown): SourceSample[] {
 
 function downloadComparison(comparisons: MethodComparison[]) {
   const headers = [
-    "SAMPLE_ID", "DATASET_METHOD_ID", "PROJECT", "FILE", "FUNCTION", "VALIDATOR_ID",
+    "SAMPLE_ID", "DATASET_METHOD_ID", "PROJECT", "FILE", "FUNCTION", "VALIDATOR_ID", "REVIEWER_ID", "SOURCE_FILE", "DATASET_SHA256",
     "SAMPLE_DISPOSITION", "INELIGIBILITY_REASON", "INELIGIBILITY_DETAILS",
     ...ANALYSIS_SMELLS.flatMap((smell) => [
       `DETECTOR_${smell.detectorColumn}`,
       `VALIDATOR_${smell.annotationColumn}`,
-      `CONSENSUS_${smell.annotationColumn}`,
+      `MAJORITY_REFERENCE_${smell.annotationColumn}`,
     ]),
     "NOTES", "SUBMITTED_AT",
   ];
@@ -68,6 +72,9 @@ function downloadComparison(comparisons: MethodComparison[]) {
     method.reference?.file ?? "",
     method.reference?.functionName ?? "",
     annotation.validatorId,
+    annotation.reviewerId ?? annotation.validatorId,
+    annotation.sourceFile,
+    method.datasetSha256,
     annotation.sampleDisposition,
     annotation.ineligibilityReason,
     annotation.ineligibilityDetails,
@@ -115,8 +122,20 @@ export default function AnalysisApp() {
   const [smellFilter, setSmellFilter] = useState<SmellKey | "all">("all");
   const [outcomeFilter, setOutcomeFilter] = useState<"all" | "agreement" | "disagreement" | "uncertain" | "ineligible">("all");
 
-  const comparisons = useMemo(() => buildComparisons(annotations, references, sources), [annotations, references, sources]);
-  const validators = useMemo(() => [...new Set(annotations.map((row) => row.validatorId))].sort(), [annotations]);
+  const [mapping, setMapping] = useState<ReviewerMapping>({});
+  const [confirmed, setConfirmed] = useState(false);
+  const [history, setHistory] = useState<EligibilityDecision[]>([]);
+  const [mode, setMode] = useState<AnalysisMode>("original");
+  const [inputs, setInputs] = useState<InputEvidence[]>([]);
+  const analysis = useMemo(() => {
+    if (!confirmed) return { all: [], selected: [], error: "" };
+    try {
+      const all = buildComparisons(mapReviewers(annotations, mapping), references, sources);
+      return { all, selected: selectAnalysis(all, history, mode), error: "" };
+    } catch (reason) { return { all: [], selected: [], error: reason instanceof Error ? reason.message : "Analysis failed." }; }
+  }, [annotations, mapping, confirmed, references, sources, history, mode]);
+  const comparisons = analysis.selected;
+  const validators = useMemo(() => [...new Set(annotations.map((row) => mapping[identityKey(row)]?.trim()).filter(Boolean))].sort(), [annotations, mapping]);
   const datasets = useMemo(() => [...new Set(annotations.map((row) => row.datasetSha256).filter(Boolean))], [annotations]);
   const matched = comparisons.filter((method) => method.reference).length;
   const latestJudgments = comparisons.flatMap((method) => method.annotations);
@@ -129,7 +148,7 @@ export default function AnalysisApp() {
   }));
   const availableF1 = metricRows.map((row) => row.performance.f1).filter((value): value is number => value !== null);
   const availableAlpha = metricRows.map((row) => row.agreement.krippendorffAlpha).filter((value): value is number => value !== null);
-  const macroF1 = availableF1.length ? availableF1.reduce((sum, value) => sum + value, 0) / availableF1.length : null;
+  const macroF1 = availableF1.length === ANALYSIS_SMELLS.length ? availableF1.reduce((sum, value) => sum + value, 0) / availableF1.length : null;
   const meanAlpha = availableAlpha.length ? availableAlpha.reduce((sum, value) => sum + value, 0) / availableAlpha.length : null;
   const filtered = comparisons.filter((method) => {
     const query = search.trim().toLowerCase();
@@ -153,7 +172,12 @@ export default function AnalysisApp() {
     if (!files.length) return;
     setError("");
     try {
+      if (new Set(files.map((file) => file.name)).size !== files.length) throw new Error("Annotation filenames must be distinct; rename duplicate filenames before importing.");
       const parsed = (await Promise.all(files.map(async (file) => parseAnnotationCsv(await file.text(), file.name)))).flat();
+      const evidence = await Promise.all(files.map((file) => fingerprint(file, "annotation")));
+      setInputs((old) => [...old.filter((item) => item.kind !== "annotation"), ...evidence]);
+      setMapping(Object.fromEntries(reviewerGroups(parsed).map((group, index) => [group.key, `Reviewer ${index + 1}`])));
+      setConfirmed(false); setHistory([]); setMode("original");
       setAnnotations(parsed);
       setAnnotationFiles(files.map((file) => file.name));
     } catch (reason) {
@@ -168,6 +192,8 @@ export default function AnalysisApp() {
     setError("");
     try {
       const parsed = (await Promise.all(files.map(async (file) => parseReferenceCsv(await file.text(), file.name)))).flat();
+      const evidence = await Promise.all(files.map((file) => fingerprint(file, "detector")));
+      setInputs((old) => [...old.filter((item) => item.kind !== "detector"), ...evidence]);
       setReferences(parsed);
       setReferenceFiles(files.map((file) => file.name));
     } catch (reason) {
@@ -181,7 +207,10 @@ export default function AnalysisApp() {
     if (!file) return;
     setError("");
     try {
-      setSources(parseSources(JSON.parse(await file.text()) as unknown));
+      const parsed = parseSources(JSON.parse(await file.text()) as unknown);
+      const evidence = await fingerprint(file, "source");
+      setInputs((old) => [...old.filter((item) => item.kind !== "source"), evidence]);
+      setSources(parsed);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The blinded JSON could not be read.");
     }
@@ -209,7 +238,7 @@ export default function AnalysisApp() {
             <h1>Compare expert judgments with detector predictions</h1>
             <p>Files are processed locally in this browser. Upload the private sampling manifest and every completed annotation CSV from the same validation study.</p>
           </div>
-          {comparisons.length > 0 && <button className="button button--primary" type="button" onClick={() => downloadComparison(comparisons)}>Export merged comparison</button>}
+          {comparisons.length > 0 && <button className="button button--primary" type="button" onClick={() => downloadComparison(comparisons)}>Export selected comparison</button>}
         </section>
 
         <section className="analysis-imports" aria-label="Analysis inputs">
@@ -234,7 +263,11 @@ export default function AnalysisApp() {
         </section>
         {error && <p className="analysis-error" role="alert">{error}</p>}
 
-        {annotations.length > 0 && (
+        {annotations.length > 0 && <ResearchPanel annotations={annotations} references={references} sources={sources} inputs={inputs}
+          comparisons={comparisons} allComparisons={analysis.all} mapping={mapping} confirmed={confirmed}
+          onMapping={(value, ready) => { setMapping(value); setConfirmed(ready); }} history={history} onHistory={setHistory}
+          mode={mode} onMode={setMode} analysisError={analysis.error} />}
+        {confirmed && !analysis.error && comparisons.length > 0 && (
           <>
             <section className="analysis-cards" aria-label="Dataset summary">
               <article><span>Methods reviewed</span><strong>{comparisons.length.toLocaleString()}</strong></article>
@@ -249,12 +282,12 @@ export default function AnalysisApp() {
             </section>
 
             <section className="analysis-panel">
-              <div className="analysis-panel__heading"><div><p className="kicker">PERFORMANCE</p><h2>Detector versus expert consensus</h2></div><p>Uncertain judgments, tied consensus, and methods reported as ineligible are retained but excluded from binary metrics.</p></div>
+              <div className="analysis-panel__heading"><div><p className="kicker">PERFORMANCE</p><h2>Detector versus majority-vote reference labels</h2></div><p>A strict majority and at least two eligible ratings are required. Uncertain references, ties, insufficient ratings and unmatched records are excluded. A single eligibility objection does not exclude the whole method in original mode.</p></div>
               <div className="analysis-table-wrap">
                 <table className="analysis-table">
-                  <thead><tr><th>Smell</th><th>TP</th><th>TN</th><th>FP</th><th>FN</th><th>Excluded</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>Specificity</th><th>F1</th><th>Balanced accuracy</th><th>MCC</th></tr></thead>
+                  <thead><tr><th>Smell</th><th>TP</th><th>TN</th><th>FP</th><th>FN</th><th>Evaluated n</th><th>Excluded</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>Specificity</th><th>F1</th><th>Balanced accuracy</th><th>MCC</th></tr></thead>
                   <tbody>{metricRows.map((row) => <tr key={row.key}>
-                    <th>{row.label}</th><td>{row.performance.tp}</td><td>{row.performance.tn}</td><td>{row.performance.fp}</td><td>{row.performance.fn}</td><td>{row.performance.uncertain + row.performance.ties + row.performance.ineligible}</td>
+                    <th>{row.label}</th><td>{row.performance.tp}</td><td>{row.performance.tn}</td><td>{row.performance.fp}</td><td>{row.performance.fn}</td><td>{row.performance.evaluated}</td><td title={`Uncertain/missing: ${row.performance.uncertain}; ties: ${row.performance.ties}; no eligible ratings: ${row.performance.ineligible}; insufficient: ${row.performance.insufficient}; unmatched: ${row.performance.unmatched}`}>{row.performance.uncertain + row.performance.ties + row.performance.ineligible + row.performance.insufficient + row.performance.unmatched}</td>
                     <td>{formatRatio(row.performance.accuracy)}</td><td>{formatRatio(row.performance.precision)}</td><td>{formatRatio(row.performance.recall)}</td><td>{formatRatio(row.performance.specificity)}</td><td>{formatRatio(row.performance.f1)}</td><td>{formatRatio(row.performance.balancedAccuracy)}</td><td>{formatRatio(row.performance.mcc)}</td>
                   </tr>)}</tbody>
                 </table>
@@ -262,7 +295,7 @@ export default function AnalysisApp() {
             </section>
 
             <section className="analysis-panel">
-              <div className="analysis-panel__heading"><div><p className="kicker">RELIABILITY</p><h2>Inter-rater agreement</h2></div><p>Present, Absent, and Uncertain are retained as nominal categories. Ineligible reports are excluded. At least two eligible ratings per method are required.</p></div>
+              <div className="analysis-panel__heading"><div><p className="kicker">RELIABILITY</p><h2>Inter-rater agreement</h2></div><p>Present, Absent, and Uncertain are retained as nominal categories. Ineligible reports are excluded. At least two eligible ratings per method are required. Fleiss’ κ is omitted when rating counts differ between methods.</p></div>
               <div className="analysis-table-wrap">
                 <table className="analysis-table analysis-table--compact">
                   <thead><tr><th>Smell</th><th>Methods with 2+ ratings</th><th>Total ratings</th><th>Pairwise agreement</th><th>Krippendorff’s α</th><th>Fleiss’ κ</th></tr></thead>
@@ -293,8 +326,8 @@ export default function AnalysisApp() {
                           <thead><tr><th>Validator</th><th>Sample status</th>{ANALYSIS_SMELLS.map((smell) => <th key={smell.key}>{smell.label}</th>)}<th>Sample issue / notes</th><th>Submitted</th></tr></thead>
                           <tbody>
                             <tr className="detector-row"><th>Detector</th><td>Prediction</td>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}><span className={decisionClass(method.reference ? method.reference.detector[smell.key] ? "present" : "absent" : null)}>{method.reference ? method.reference.detector[smell.key] ? "Present" : "Absent" : "Missing"}</span></td>)}<td>{method.reference?.smellTypes || "—"}</td><td>—</td></tr>
-                            {method.annotations.map((annotation) => <tr key={annotation.annotationId}><th>{annotation.validatorId}</th><td><span className={decisionClass(annotation.sampleDisposition)}>{decisionLabel(annotation.sampleDisposition)}</span></td>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}>{annotation.sampleDisposition === "ineligible" ? <span className={decisionClass(null)}>Not rated</span> : <span className={decisionClass(annotation.decisions[smell.key])}>{decisionLabel(annotation.decisions[smell.key])}</span>}</td>)}<td className="notes-cell">{annotation.sampleDisposition === "ineligible" ? `${annotation.ineligibilityReason.replaceAll("_", " ")}${annotation.ineligibilityDetails ? `: ${annotation.ineligibilityDetails}` : ""}` : annotation.notes || "—"}</td><td>{annotation.submittedAt ? new Date(annotation.submittedAt).toLocaleString() : "—"}</td></tr>)}
-                            <tr className="consensus-row"><th>Consensus</th><td>{method.annotations.some((annotation) => annotation.sampleDisposition === "eligible") ? "Eligible ratings" : "Excluded"}</td>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}><span className={decisionClass(method.annotations.some((annotation) => annotation.sampleDisposition === "eligible") ? method.consensus[smell.key] : "ineligible")}>{method.annotations.some((annotation) => annotation.sampleDisposition === "eligible") ? decisionLabel(method.consensus[smell.key]) : "Ineligible"}</span></td>)}<td colSpan={2}>Simple modal category; ties remain unresolved.</td></tr>
+                            {method.annotations.map((annotation) => <tr key={`${annotation.sourceFile}:${annotation.reviewerId}:${annotation.annotationId}`}><th>{annotation.reviewerId ?? annotation.validatorId}</th><td><span className={decisionClass(annotation.sampleDisposition)}>{decisionLabel(annotation.sampleDisposition)}</span></td>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}>{annotation.sampleDisposition === "ineligible" ? <span className={decisionClass(null)}>Not rated</span> : <span className={decisionClass(annotation.decisions[smell.key])}>{decisionLabel(annotation.decisions[smell.key])}</span>}</td>)}<td className="notes-cell">{annotation.sampleDisposition === "ineligible" ? `${annotation.ineligibilityReason.replaceAll("_", " ")}${annotation.ineligibilityDetails ? `: ${annotation.ineligibilityDetails}` : ""}` : annotation.notes || "—"}</td><td>{annotation.submittedAt ? new Date(annotation.submittedAt).toLocaleString() : "—"}</td></tr>)}
+                            <tr className="consensus-row"><th>Majority-vote reference</th><td>{method.annotations.some((annotation) => annotation.sampleDisposition === "eligible") ? "Eligible ratings" : "Excluded"}</td>{ANALYSIS_SMELLS.map((smell) => <td key={smell.key}><span className={decisionClass(method.annotations.some((annotation) => annotation.sampleDisposition === "eligible") ? method.consensus[smell.key] : "ineligible")}>{method.annotations.some((annotation) => annotation.sampleDisposition === "eligible") ? decisionLabel(method.consensus[smell.key]) : "Ineligible"}</span></td>)}<td colSpan={2}>Strict majority of eligible ratings; minimum two ratings; ties remain unresolved.</td></tr>
                           </tbody>
                         </table>
                       </div>

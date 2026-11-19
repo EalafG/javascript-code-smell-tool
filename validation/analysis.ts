@@ -16,6 +16,8 @@ export type ImportedAnnotation = {
   sourceFile: string;
   annotationId: string;
   validatorId: string;
+  /** Researcher-confirmed identity; exported validatorId remains untouched. */
+  reviewerId?: string;
   sampleId: string;
   datasetMethodId: string;
   datasetSha256: string;
@@ -69,6 +71,8 @@ export type BinaryMetrics = {
   uncertain: number;
   ties: number;
   ineligible: number;
+  insufficient: number;
+  unmatched: number;
   evaluated: number;
   accuracy: number | null;
   precision: number | null;
@@ -162,7 +166,9 @@ function numberOrNull(value: string | undefined): number | null {
 }
 
 function binary(value: string | undefined): 0 | 1 {
-  return String(value).trim() === "1" ? 1 : 0;
+  if (value?.trim() === "1") return 1;
+  if (value?.trim() === "0") return 0;
+  throw new Error("Detector predictions must be 0 or 1; missing values cannot be treated as negative.");
 }
 
 export function parseAnnotationCsv(text: string, sourceFile: string): ImportedAnnotation[] {
@@ -176,6 +182,7 @@ export function parseAnnotationCsv(text: string, sourceFile: string): ImportedAn
     const disposition = sampleDisposition(row.SAMPLE_DISPOSITION, index + 2);
     const reason = ineligibilityReason(row.INELIGIBILITY_REASON, disposition, index + 2);
     const details = row.INELIGIBILITY_DETAILS || "";
+    if (!row.VALIDATOR_ID.trim() || !row.SAMPLE_ID.trim()) throw new Error(`Row ${index + 2}: reviewer and sample identifiers must not be empty.`);
     if (reason === "other" && !details.trim()) {
       throw new Error(`Row ${index + 2}: INELIGIBILITY_DETAILS is required when the reason is Other.`);
     }
@@ -228,10 +235,24 @@ export function parseReferenceCsv(text: string, sourceFile: string): DetectorRef
 }
 
 export function latestAnnotations(rows: ImportedAnnotation[]): ImportedAnnotation[] {
+  const identities = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (row.reviewerId) continue;
+    const files = identities.get(row.validatorId) ?? new Set<string>();
+    files.add(row.sourceFile); identities.set(row.validatorId, files);
+  }
+  if ([...identities.values()].some((files) => files.size > 1)) {
+    throw new Error("A validator ID occurs in multiple files. Confirm a reviewer mapping before analysis.");
+  }
   const latest = new Map<string, ImportedAnnotation>();
   for (const row of rows) {
-    const key = `${row.datasetSha256}\u0000${row.validatorId}\u0000${row.sampleId}`;
+    const key = JSON.stringify([row.datasetSha256, row.reviewerId ?? row.validatorId, row.sampleId]);
     const current = latest.get(key);
+    if (current && row.revision === current.revision && row.submittedAt === current.submittedAt &&
+      JSON.stringify([row.decisions, row.sampleDisposition, row.ineligibilityReason, row.ineligibilityDetails]) !==
+      JSON.stringify([current.decisions, current.sampleDisposition, current.ineligibilityReason, current.ineligibilityDetails])) {
+      throw new Error(`Conflicting ratings have the same revision and timestamp for ${row.sampleId}. Resolve the reviewer mapping or input records.`);
+    }
     if (!current || row.revision > current.revision || (row.revision === current.revision && row.submittedAt > current.submittedAt)) {
       latest.set(key, row);
     }
@@ -240,12 +261,12 @@ export function latestAnnotations(rows: ImportedAnnotation[]): ImportedAnnotatio
 }
 
 function consensusFor(values: Decision[]): Decision | "tie" | null {
-  if (!values.length) return null;
+  if (values.length < 2) return null;
   const counts: Record<Decision, number> = { present: 0, absent: 0, uncertain: 0 };
   values.forEach((value) => { counts[value] += 1; });
   const maximum = Math.max(...Object.values(counts));
   const winners = (Object.keys(counts) as Decision[]).filter((key) => counts[key] === maximum);
-  return winners.length === 1 ? winners[0] : "tie";
+  return winners.length === 1 && maximum > values.length / 2 ? winners[0] : "tie";
 }
 
 export function buildComparisons(
@@ -255,8 +276,6 @@ export function buildComparisons(
 ): MethodComparison[] {
   const annotations = latestAnnotations(annotationRows);
   const referenceByDatasetSample = new Map(references.filter((row) => row.sampleId && row.datasetSha256).map((row) => [`${row.datasetSha256}\u0000${row.sampleId}`, row]));
-  const referenceBySample = new Map(references.filter((row) => row.sampleId).map((row) => [row.sampleId, row]));
-  const referenceByMethod = new Map(references.map((row) => [row.datasetMethodId, row]));
   const sourceByDatasetSample = new Map(sources.filter((row) => row.datasetSha256).map((row) => [`${row.datasetSha256}\u0000${row.sampleId}`, row]));
   const sourceBySample = new Map(sources.map((row) => [row.sampleId, row]));
   const grouped = new Map<string, ImportedAnnotation[]>();
@@ -269,7 +288,10 @@ export function buildComparisons(
   return [...grouped.values()].map((rows) => {
     const sampleId = rows[0].sampleId;
     const datasetSha256 = rows[0].datasetSha256;
-    const reference = referenceByDatasetSample.get(`${datasetSha256}\u0000${sampleId}`) ?? referenceBySample.get(sampleId) ?? referenceByMethod.get(rows[0].datasetMethodId) ?? null;
+    const candidates = references.filter((ref) => (!ref.datasetSha256 || !datasetSha256 || ref.datasetSha256 === datasetSha256) &&
+      (ref.sampleId === sampleId || (!ref.sampleId && ref.datasetMethodId === rows[0].datasetMethodId)));
+    if (candidates.length > 1) throw new Error(`Ambiguous detector match for ${sampleId}; load one matching manifest.`);
+    const reference = referenceByDatasetSample.get(`${datasetSha256}\u0000${sampleId}`) ?? candidates[0] ?? null;
     const eligibleRows = rows.filter((row) => row.sampleDisposition === "eligible");
     return {
       sampleId,
@@ -290,10 +312,11 @@ function ratio(numerator: number, denominator: number): number | null {
 }
 
 export function binaryMetrics(comparisons: MethodComparison[], smell: SmellKey): BinaryMetrics {
-  let tp = 0; let tn = 0; let fp = 0; let fn = 0; let uncertain = 0; let ties = 0; let ineligible = 0;
+  let tp = 0; let tn = 0; let fp = 0; let fn = 0; let uncertain = 0; let ties = 0; let ineligible = 0; let insufficient = 0; let unmatched = 0;
   for (const method of comparisons) {
-    if (!method.reference) continue;
+    if (!method.reference) { unmatched += 1; continue; }
     if (!method.annotations.some((row) => row.sampleDisposition === "eligible")) { ineligible += 1; continue; }
+    if (method.annotations.filter((row) => row.sampleDisposition === "eligible" && row.decisions[smell] !== null).length < 2) { insufficient += 1; continue; }
     const consensus = method.consensus[smell];
     if (consensus === "uncertain" || consensus === null) { uncertain += 1; continue; }
     if (consensus === "tie") { ties += 1; continue; }
@@ -310,12 +333,12 @@ export function binaryMetrics(comparisons: MethodComparison[], smell: SmellKey):
   const specificity = ratio(tn, tn + fp);
   const denominator = Math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn));
   return {
-    tp, tn, fp, fn, uncertain, ties, ineligible, evaluated,
+    tp, tn, fp, fn, uncertain, ties, ineligible, insufficient, unmatched, evaluated,
     accuracy: ratio(tp + tn, evaluated),
     precision,
     recall,
     specificity,
-    f1: precision !== null && recall !== null && precision + recall ? 2 * precision * recall / (precision + recall) : null,
+    f1: ratio(2 * tp, 2 * tp + fp + fn),
     balancedAccuracy: recall !== null && specificity !== null ? (recall + specificity) / 2 : null,
     mcc: denominator ? ((tp * tn) - (fp * fn)) / denominator : null,
   };
@@ -365,7 +388,7 @@ export function agreementMetrics(comparisons: MethodComparison[], smell: SmellKe
     ratings,
     percentAgreement: ratio(agreeingPairs, allPairs),
     krippendorffAlpha: doValue !== null && deValue ? 1 - doValue / deValue : null,
-    fleissKappa: meanObservedAgreement !== null && expectedAgreement < 1
+    fleissKappa: new Set(units.map((unit) => unit.length)).size === 1 && meanObservedAgreement !== null && expectedAgreement < 1
       ? (meanObservedAgreement - expectedAgreement) / (1 - expectedAgreement)
       : null,
   };
